@@ -1,6 +1,6 @@
 // ============================================
 // СОКОЛОВ AI - ПОЛНЫЙ КЛИЕНТСКИЙ КОД
-// Без streaming (только обычные запросы) - фикс QUIC ошибок
+// Как DeepSeek: стриминг, кнопка Stop, копирование кода, темы
 // ============================================
 
 (function() {
@@ -13,6 +13,9 @@
     let currentSessionId = null;
     let chats = [];
     let isTyping = false;
+    let currentAbortController = null;
+    let currentStreamingMessage = null;
+    let isStreaming = false;
     let voiceManager = null;
     
     // DOM элементы
@@ -23,7 +26,6 @@
     const chatsList = document.getElementById('chatsList');
     const messagesList = document.getElementById('messagesList');
     const welcomeScreen = document.getElementById('welcomeScreen');
-    const typingIndicator = document.getElementById('typingIndicator');
     const messageInput = document.getElementById('messageInput');
     const sendBtn = document.getElementById('sendBtn');
     const modelSelect = document.getElementById('modelSelect');
@@ -108,7 +110,7 @@
     
     function scrollToBottom() {
         setTimeout(() => {
-            const container = document.querySelector('.messages-container');
+            const container = document.querySelector('.messages-container-ds, .messages-container');
             if (container) {
                 container.scrollTop = container.scrollHeight;
             }
@@ -116,15 +118,17 @@
     }
     
     function showTypingIndicator() {
-        if (typingIndicator) {
-            typingIndicator.style.display = 'flex';
+        const indicator = document.getElementById('typingIndicator');
+        if (indicator) {
+            indicator.style.display = 'flex';
             scrollToBottom();
         }
     }
     
     function hideTypingIndicator() {
-        if (typingIndicator) {
-            typingIndicator.style.display = 'none';
+        const indicator = document.getElementById('typingIndicator');
+        if (indicator) {
+            indicator.style.display = 'none';
         }
     }
     
@@ -136,6 +140,81 @@
     }
     
     // ============================================
+    // УПРАВЛЕНИЕ КНОПКОЙ STOP (как у DeepSeek)
+    // ============================================
+    
+    function showStopButton() {
+        const stopBtn = document.getElementById('stopBtn');
+        const sendBtnElement = document.getElementById('sendBtn');
+        if (stopBtn) {
+            stopBtn.style.display = 'flex';
+        }
+        if (sendBtnElement) {
+            sendBtnElement.style.display = 'none';
+        }
+    }
+    
+    function hideStopButton() {
+        const stopBtn = document.getElementById('stopBtn');
+        const sendBtnElement = document.getElementById('sendBtn');
+        if (stopBtn) {
+            stopBtn.style.display = 'none';
+        }
+        if (sendBtnElement) {
+            sendBtnElement.style.display = 'flex';
+        }
+    }
+    
+    function stopGeneration() {
+        if (currentAbortController) {
+            currentAbortController.abort();
+            currentAbortController = null;
+            isStreaming = false;
+            
+            if (currentStreamingMessage && currentStreamingMessage.innerText) {
+                const content = currentStreamingMessage.innerText;
+                if (content && content.trim()) {
+                    const chat = chats.find(c => c.id === currentSessionId);
+                    if (chat) {
+                        chat.messages.push({
+                            id: Date.now().toString(),
+                            role: 'assistant',
+                            content: content + '\n\n*[Ответ прерван пользователем]*',
+                            timestamp: new Date().toISOString()
+                        });
+                        saveChats();
+                    }
+                }
+            }
+            
+            hideStopButton();
+            hideTypingIndicator();
+            updateStatus('ready', 'Готов к работе');
+            showToast('Генерация ответа остановлена', 'info');
+        }
+    }
+    
+    function addStopButton() {
+        const inputWrapper = document.querySelector('.input-wrapper-ds, .input-wrapper');
+        if (!inputWrapper) return;
+        
+        if (document.getElementById('stopBtn')) return;
+        
+        const sendBtnElement = document.getElementById('sendBtn');
+        if (!sendBtnElement) return;
+        
+        const stopBtn = document.createElement('button');
+        stopBtn.id = 'stopBtn';
+        stopBtn.className = 'send-btn-ds stop-btn';
+        stopBtn.innerHTML = '<i class="fas fa-stop"></i>';
+        stopBtn.title = 'Остановить генерацию';
+        stopBtn.style.display = 'none';
+        stopBtn.onclick = stopGeneration;
+        
+        sendBtnElement.parentNode.appendChild(stopBtn);
+    }
+    
+    // ============================================
     // ФОРМАТИРОВАНИЕ СООБЩЕНИЙ С КОДОМ
     // ============================================
     
@@ -144,21 +223,20 @@
         
         let formatted = content;
         
-        // Блоки кода
+        // Блоки кода с кнопкой копирования
         formatted = formatted.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
             const language = lang || 'plaintext';
             const escapedCode = escapeHtml(code.trim());
+            const codeId = 'code_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             
             return `
-                <div class="code-block-wrapper">
-                    <div class="code-header">
+                <div class="code-block-wrapper-ds code-block-wrapper">
+                    <div class="code-header-ds code-header">
                         <span class="code-language">${escapeHtml(language)}</span>
-                        <div class="code-actions">
-                            <button class="copy-code-btn" data-code="${escapedCode.replace(/"/g, '&quot;')}" onclick="window.copyCodeBlock(this)">
-                                <i class="fas fa-copy"></i>
-                                <span>Копировать</span>
-                            </button>
-                        </div>
+                        <button class="copy-code-btn-ds copy-code-btn" data-code="${escapedCode.replace(/"/g, '&quot;')}" onclick="window.copyCodeBlock(this)">
+                            <i class="fas fa-copy"></i>
+                            <span>Копировать код</span>
+                        </button>
                     </div>
                     <pre><code class="language-${language}">${escapedCode}</code></pre>
                 </div>
@@ -182,6 +260,7 @@
         // Списки
         formatted = formatted.replace(/^- (.*$)/gm, '<li>$1</li>');
         formatted = formatted.replace(/^\* (.*$)/gm, '<li>$1</li>');
+        formatted = formatted.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
         
         // Переносы строк
         formatted = formatted.replace(/\n/g, '<br>');
@@ -202,16 +281,16 @@
         
         try {
             await navigator.clipboard.writeText(code);
-            const originalText = button.innerHTML;
+            const originalHTML = button.innerHTML;
             button.innerHTML = '<i class="fas fa-check"></i><span>Скопировано!</span>';
             button.classList.add('copied');
             
             setTimeout(() => {
-                button.innerHTML = originalText;
+                button.innerHTML = originalHTML;
                 button.classList.remove('copied');
             }, 2000);
             
-            showToast('Код скопирован', 'success');
+            showToast('Код скопирован в буфер обмена', 'success');
         } catch (err) {
             const textarea = document.createElement('textarea');
             textarea.value = code;
@@ -255,13 +334,13 @@
         }
         
         chatsList.innerHTML = chats.map(chat => `
-            <div class="chat-item ${chat.id === currentSessionId ? 'active' : ''}" data-chat-id="${chat.id}">
-                <div class="chat-icon">
+            <div class="chat-item-ds chat-item ${chat.id === currentSessionId ? 'active' : ''}" data-chat-id="${chat.id}">
+                <div class="chat-icon-ds">
                     <i class="fas fa-message"></i>
                 </div>
-                <div class="chat-info">
-                    <div class="chat-title">${escapeHtml(chat.title || 'Новый чат')}</div>
-                    <div class="chat-preview">${escapeHtml(chat.messages[chat.messages.length - 1]?.content?.substring(0, 50) || 'Новый чат')}</div>
+                <div class="chat-info-ds">
+                    <div class="chat-title-ds">${escapeHtml(chat.title || 'Новый чат')}</div>
+                    <div class="chat-preview-ds">${escapeHtml(chat.messages[chat.messages.length - 1]?.content?.substring(0, 50) || 'Новый чат')}</div>
                 </div>
                 <div class="chat-date">${formatDate(chat.createdAt)}</div>
                 <button class="chat-delete" data-id="${chat.id}"><i class="fas fa-times"></i></button>
@@ -323,12 +402,12 @@
         const formattedContent = role === 'bot' ? formatMessageWithCode(content) : escapeHtml(content).replace(/\n/g, '<br>');
         
         const messageHtml = `
-            <div class="message ${role === 'user' ? 'user' : 'bot'}">
-                <div class="message-avatar">
-                    ${role === 'user' ? '<i class="fas fa-user"></i>' : '<i class="fas fa-robot"></i>'}
+            <div class="message-ds message ${role === 'user' ? 'user' : 'bot'}">
+                <div class="message-avatar-ds">
+                    ${role === 'user' ? '<i class="fas fa-user"></i>' : '🤖'}
                 </div>
-                <div class="message-content">
-                    <div class="message-bubble">
+                <div class="message-content-ds">
+                    <div class="message-bubble-ds">
                         ${formattedContent}
                     </div>
                 </div>
@@ -427,59 +506,141 @@
     }
     
     // ============================================
-    // ОТПРАВКА СООБЩЕНИЙ (только обычные запросы)
+    // ОТПРАВКА СООБЩЕНИЙ (СТРИМИНГ КАК У DEEPSEEK)
     // ============================================
     
-    async function sendMessageRegular(message) {
+    async function sendMessageWithStream(message) {
         const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
         
+        if (currentAbortController) {
+            currentAbortController.abort();
+        }
+        
+        currentAbortController = new AbortController();
+        isStreaming = true;
+        
+        const timeoutId = setTimeout(() => {
+            if (currentAbortController) {
+                currentAbortController.abort();
+                hideStopButton();
+                addMessage('bot', '⏰ Превышено время ожидания ответа. Попробуйте еще раз.');
+                isStreaming = false;
+                updateStatus('ready', 'Готов к работе');
+            }
+        }, 300000);
+        
         try {
-            const response = await fetch(`/api/chat/${currentSessionId}`, {
+            const response = await fetch(`/api/chat/${currentSessionId}/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     message: message,
                     model: selectedModel,
-                    temperature: 0.7
-                })
+                    temperature: 1.0
+                }),
+                signal: currentAbortController.signal
             });
             
-            const data = await response.json();
-            
-            hideTypingIndicator();
-            
-            if (data.message) {
-                addMessage('bot', data.message.content);
-                // Сохраняем ответ в локальный чат
-                const chat = chats.find(c => c.id === currentSessionId);
-                if (chat) {
-                    chat.messages.push(data.message);
-                    saveChats();
-                }
-            } else if (data.error) {
-                addMessage('bot', `⚠️ Ошибка: ${data.error}`);
-            } else {
-                addMessage('bot', '⚠️ Не удалось получить ответ.');
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
             }
             
-            return true;
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            
+            let botMessageElement = null;
+            let fullResponse = '';
+            let messageContainer = null;
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                const chunk = decoder.decode(value);
+                const lines = chunk.split('\n');
+                
+                for (const line of lines) {
+                    if (line.startsWith('data: ')) {
+                        const data = line.slice(6);
+                        if (data === '[DONE]') continue;
+                        
+                        try {
+                            const parsed = JSON.parse(data);
+                            if (parsed.content) {
+                                fullResponse += parsed.content;
+                                
+                                if (!botMessageElement) {
+                                    const messageHtml = `
+                                        <div class="message-ds message bot">
+                                            <div class="message-avatar-ds">
+                                                🤖
+                                            </div>
+                                            <div class="message-content-ds">
+                                                <div class="message-bubble-ds" id="streamingMessage"></div>
+                                            </div>
+                                        </div>
+                                    `;
+                                    messagesList.insertAdjacentHTML('beforeend', messageHtml);
+                                    botMessageElement = document.getElementById('streamingMessage');
+                                    currentStreamingMessage = botMessageElement;
+                                    scrollToBottom();
+                                }
+                                
+                                if (botMessageElement) {
+                                    botMessageElement.innerHTML = formatMessageWithCode(fullResponse);
+                                    scrollToBottom();
+                                }
+                            }
+                            
+                            if (parsed.done) {
+                                const chat = chats.find(c => c.id === currentSessionId);
+                                if (chat) {
+                                    chat.messages.push({
+                                        id: Date.now().toString(),
+                                        role: 'assistant',
+                                        content: fullResponse,
+                                        timestamp: new Date().toISOString()
+                                    });
+                                    saveChats();
+                                }
+                                currentStreamingMessage = null;
+                            }
+                            
+                        } catch (e) {}
+                    }
+                    
+                    if (line.startsWith('event: done')) {
+                        break;
+                    }
+                    
+                    if (line.startsWith('event: error')) {
+                        try {
+                            const errorData = JSON.parse(line.slice(12));
+                            throw new Error(errorData.error);
+                        } catch (e) {
+                            throw new Error('Ошибка потока данных');
+                        }
+                    }
+                }
+            }
             
         } catch (error) {
-            console.error('Regular chat error:', error);
-            hideTypingIndicator();
-            
-            let errorMessage = '⚠️ Ошибка соединения. Попробуйте позже.';
-            if (error.name === 'AbortError') {
-                errorMessage = '⏰ Превышено время ожидания ответа. Попробуйте еще раз.';
+            console.error('Stream error:', error);
+            if (error.name !== 'AbortError') {
+                addMessage('bot', '⚠️ Ошибка соединения. Попробуйте еще раз.');
             }
-            addMessage('bot', errorMessage);
-            return false;
+        } finally {
+            clearTimeout(timeoutId);
+            currentAbortController = null;
+            isStreaming = false;
+            hideStopButton();
+            currentStreamingMessage = null;
         }
     }
     
     async function sendMessage() {
         const message = messageInput.value.trim();
-        if (!message || isTyping) return;
+        if (!message || isTyping || isStreaming) return;
         
         messageInput.value = '';
         adjustTextareaHeight();
@@ -493,9 +654,10 @@
         showTypingIndicator();
         isTyping = true;
         updateStatus('thinking', 'Думаю...');
+        showStopButton();
         
         try {
-            await sendMessageRegular(message);
+            await sendMessageWithStream(message);
         } catch (error) {
             console.error('Ошибка отправки:', error);
             addMessage('bot', '⚠️ Извините, произошла ошибка. Пожалуйста, попробуйте позже.');
@@ -504,6 +666,7 @@
             hideTypingIndicator();
             isTyping = false;
             updateStatus('ready', 'Готов к работе');
+            hideStopButton();
         }
     }
     
@@ -564,12 +727,7 @@
         } catch (error) {
             console.error('Ошибка анализа:', error);
             hideTypingIndicator();
-            
-            let errorMessage = '⚠️ Не удалось проанализировать файл. Попробуйте еще раз.';
-            if (error.name === 'AbortError') {
-                errorMessage = '⏰ Превышено время ожидания. Файл слишком большой?';
-            }
-            addMessage('bot', errorMessage);
+            addMessage('bot', '⚠️ Не удалось проанализировать файл. Попробуйте еще раз.');
         } finally {
             isTyping = false;
             updateStatus('ready', 'Готов к работе');
@@ -582,7 +740,7 @@
     
     class ThemeManager {
         constructor() {
-            this.currentTheme = localStorage.getItem('sokolov_theme') || 'dark';
+            this.currentTheme = localStorage.getItem('sokolov_theme') || 'light';
             this.themeToggle = document.getElementById('themeToggle');
             this.init();
         }
@@ -594,12 +752,29 @@
             if (this.themeToggle) {
                 this.themeToggle.addEventListener('click', () => this.toggleTheme());
             }
+            
+            // Слушаем системные изменения
+            if (window.matchMedia) {
+                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+                    if (!localStorage.getItem('sokolov_theme')) {
+                        const newTheme = e.matches ? 'dark' : 'light';
+                        this.applyTheme(newTheme);
+                        this.updateIcon(newTheme);
+                    }
+                });
+            }
         }
         
         applyTheme(theme) {
             document.documentElement.setAttribute('data-theme', theme);
             localStorage.setItem('sokolov_theme', theme);
             this.currentTheme = theme;
+            
+            // Обновляем theme-color meta
+            const metaThemeColor = document.getElementById('theme-color');
+            if (metaThemeColor) {
+                metaThemeColor.setAttribute('content', theme === 'dark' ? '#343541' : '#ffffff');
+            }
         }
         
         toggleTheme() {
@@ -613,7 +788,7 @@
             if (!this.themeToggle) return;
             const icon = this.themeToggle.querySelector('i');
             if (icon) {
-                icon.className = theme === 'dark' ? 'fas fa-moon' : 'fas fa-sun';
+                icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
             }
         }
     }
@@ -657,11 +832,11 @@
     }
     
     function addVoiceButton() {
-        const inputTools = document.querySelector('.input-tools');
+        const inputTools = document.querySelector('.input-tools-ds, .input-tools');
         if (inputTools && !document.getElementById('recordVoiceBtn')) {
             const voiceBtn = document.createElement('button');
             voiceBtn.id = 'recordVoiceBtn';
-            voiceBtn.className = 'tool-btn voice-btn';
+            voiceBtn.className = 'tool-btn-ds tool-btn';
             voiceBtn.innerHTML = '<i class="fas fa-microphone"></i>';
             voiceBtn.title = 'Голосовой ввод';
             voiceBtn.onclick = () => {
@@ -702,6 +877,7 @@
         }
         
         setupEventListeners();
+        addStopButton();
         
         window.themeManager = new ThemeManager();
         
@@ -727,11 +903,13 @@
         messageInput?.addEventListener('input', adjustTextareaHeight);
         
         newChatBtn?.addEventListener('click', async () => {
+            if (isStreaming) stopGeneration();
             await createNewSession();
         });
         
         clearChatBtn?.addEventListener('click', () => {
             if (confirm('Очистить текущий чат?')) {
+                if (isStreaming) stopGeneration();
                 clearMessages();
                 const chat = chats.find(c => c.id === currentSessionId);
                 if (chat) {
@@ -776,7 +954,7 @@
             showToast(`Модель: ${modelSelect.options[modelSelect.selectedIndex].text}`, 'info');
         });
         
-        document.querySelectorAll('.suggestion-btn').forEach(btn => {
+        document.querySelectorAll('.suggestion-btn-ds, .suggestion-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const prompt = btn.dataset.prompt;
                 if (prompt) {
