@@ -859,3 +859,237 @@
     }
     
 })();
+// ============================================
+// ДОБАВИТЬ В КОНЕЦ ФАЙЛА app.js
+// ============================================
+
+// ============================================
+// ГОЛОСОВАЯ ФУНКЦИОНАЛЬНОСТЬ
+// ============================================
+
+let voiceManager = null;
+let voiceModal = null;
+let voiceTimer = null;
+let voiceStartTime = null;
+let volumeAnimation = null;
+
+function initVoice() {
+    if (typeof VoiceManager !== 'undefined') {
+        voiceManager = new VoiceManager();
+        
+        voiceManager.onTranscript = (text) => {
+            Logger.log('Распознано:', text);
+            // Вставляем распознанный текст в поле ввода
+            if (messageInput) {
+                messageInput.value = text;
+                adjustTextareaHeight();
+                // Автоматически отправляем после короткой паузы
+                setTimeout(() => {
+                    if (messageInput.value.trim()) {
+                        sendMessage();
+                    }
+                }, 500);
+            }
+        };
+        
+        voiceManager.onResponse = (answer) => {
+            Logger.log('Ответ:', answer);
+            addMessage('bot', answer);
+        };
+        
+        voiceManager.onError = (error) => {
+            Logger.error('Voice error:', error);
+            showToast(error, 'error');
+        };
+        
+        voiceManager.onRecordingStart = () => {
+            showVoiceModal();
+            updateVoiceButton(true);
+        };
+        
+        voiceManager.onRecordingStop = () => {
+            hideVoiceModal();
+            updateVoiceButton(false);
+        };
+        
+        voiceManager.onVolumeChange = (volume) => {
+            updateVoiceVisualizer(volume);
+        };
+        
+        Logger.log('🎤 Голосовой модуль готов');
+    } else {
+        Logger.warn('VoiceManager не загружен');
+    }
+}
+
+function updateVoiceButton(isRecording) {
+    const voiceBtn = document.getElementById('recordVoiceBtn');
+    if (!voiceBtn) return;
+    
+    if (isRecording) {
+        voiceBtn.classList.add('recording');
+        voiceBtn.innerHTML = '<i class="fas fa-stop"></i>';
+        voiceBtn.title = 'Остановить запись';
+    } else {
+        voiceBtn.classList.remove('recording');
+        voiceBtn.innerHTML = '<i class="fas fa-microphone"></i>';
+        voiceBtn.title = 'Голосовой ввод';
+    }
+}
+
+function showVoiceModal() {
+    if (voiceModal) {
+        voiceModal.style.display = 'flex';
+        voiceStartTime = Date.now();
+        startVoiceTimer();
+        startVolumeVisualizer();
+    }
+}
+
+function hideVoiceModal() {
+    if (voiceModal) {
+        voiceModal.style.display = 'none';
+    }
+    if (voiceTimer) {
+        clearInterval(voiceTimer);
+        voiceTimer = null;
+    }
+    if (volumeAnimation) {
+        cancelAnimationFrame(volumeAnimation);
+        volumeAnimation = null;
+    }
+}
+
+function startVoiceTimer() {
+    const timerEl = document.getElementById('voiceTimer');
+    if (!timerEl) return;
+    
+    voiceTimer = setInterval(() => {
+        if (voiceStartTime) {
+            const elapsed = Math.floor((Date.now() - voiceStartTime) / 1000);
+            const minutes = Math.floor(elapsed / 60);
+            const seconds = elapsed % 60;
+            timerEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+    }, 100);
+}
+
+function startVolumeVisualizer() {
+    const updateVolume = () => {
+        if (voiceManager && voiceManager.isRecordingActive()) {
+            const volume = voiceManager.recorder?.getVolume() || 0;
+            updateVoiceVisualizer(volume);
+            volumeAnimation = requestAnimationFrame(updateVolume);
+        }
+    };
+    updateVolume();
+}
+
+function updateVoiceVisualizer(volume) {
+    // Обновляем бары в модальном окне
+    const bars = document.querySelectorAll('.voice-visualizer span');
+    const intensity = Math.min(1, volume / 100);
+    
+    bars.forEach((bar, i) => {
+        const height = 20 + (intensity * 60) * (1 - i * 0.1);
+        bar.style.height = `${Math.max(20, height)}px`;
+    });
+    
+    // Обновляем индикатор в хедере если есть
+    const volumeBars = document.querySelectorAll('.volume-bar');
+    if (volumeBars.length > 0) {
+        const levels = [0.2, 0.4, 0.6, 0.8, 1];
+        levels.forEach((level, i) => {
+            if (volumeBars[i]) {
+                volumeBars[i].style.height = volume > level * 100 ? '20px' : '4px';
+            }
+        });
+    }
+}
+
+// Добавить голосовую кнопку в input-tools
+function addVoiceButtonToInput() {
+    const inputTools = document.querySelector('.input-tools');
+    if (inputTools && !document.getElementById('recordVoiceBtn')) {
+        const voiceBtn = document.createElement('button');
+        voiceBtn.id = 'recordVoiceBtn';
+        voiceBtn.className = 'tool-btn voice-btn';
+        voiceBtn.innerHTML = '<i class="fas fa-microphone"></i>';
+        voiceBtn.title = 'Голосовой ввод';
+        voiceBtn.onclick = toggleVoiceRecording;
+        
+        // Вставляем перед последней кнопкой
+        const clearBtn = document.getElementById('clearInputBtn');
+        if (clearBtn) {
+            inputTools.insertBefore(voiceBtn, clearBtn);
+        } else {
+            inputTools.appendChild(voiceBtn);
+        }
+    }
+}
+
+function toggleVoiceRecording() {
+    if (!voiceManager) {
+        showToast('Голосовой модуль загружается...', 'info');
+        return;
+    }
+    
+    if (voiceManager.isRecordingActive()) {
+        voiceManager.stopRecording();
+    } else {
+        voiceManager.startRecording();
+    }
+}
+
+// Создаем модальное окно голоса
+function createVoiceModal() {
+    const modal = document.createElement('div');
+    modal.id = 'voiceModal';
+    modal.className = 'voice-modal';
+    modal.style.display = 'none';
+    modal.innerHTML = `
+        <div class="voice-modal-content">
+            <div class="voice-circle">
+                <i class="fas fa-microphone"></i>
+            </div>
+            <div class="voice-visualizer">
+                <span></span><span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div class="voice-timer" id="voiceTimer">0:00</div>
+            <div class="voice-actions">
+                <button class="voice-cancel-btn" id="voiceCancelBtn">
+                    <i class="fas fa-times"></i> Отмена
+                </button>
+                <button class="voice-stop-btn" id="voiceStopBtn">
+                    <i class="fas fa-stop"></i> Завершить
+                </button>
+            </div>
+            <div class="voice-hint">
+                <i class="fas fa-microphone-alt"></i> Говорите... мы вас слушаем
+            </div>
+        </div>
+    `;
+    
+    document.body.appendChild(modal);
+    voiceModal = modal;
+    
+    // Обработчики
+    document.getElementById('voiceCancelBtn')?.addEventListener('click', () => {
+        if (voiceManager) voiceManager.stopRecording();
+        hideVoiceModal();
+    });
+    
+    document.getElementById('voiceStopBtn')?.addEventListener('click', () => {
+        if (voiceManager) voiceManager.stopRecording();
+    });
+}
+
+// Инициализация голоса при загрузке
+document.addEventListener('DOMContentLoaded', () => {
+    setTimeout(() => {
+        initVoice();
+        createVoiceModal();
+        addVoiceButtonToInput();
+    }, 1000);
+});
