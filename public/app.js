@@ -1,6 +1,6 @@
 // ============================================
 // СОКОЛОВ AI - ПОЛНЫЙ КЛИЕНТСКИЙ КОД
-// Стриминг + fallback на обычный чат
+// С поддержкой двух моделей: DeepSeek-Chat и DeepSeek-Coder
 // ============================================
 
 (function() {
@@ -17,6 +17,27 @@
     let currentStreamingMessage = null;
     let isStreaming = false;
     let voiceManager = null;
+    let currentModel = 'deepseek-chat';
+    
+    // Конфигурация моделей
+    const MODELS = {
+        'deepseek-chat': {
+            name: 'Соколов AI',
+            shortName: 'Общий',
+            icon: '🧠',
+            description: 'Универсальный помощник для любых вопросов',
+            temperature: 1.0,
+            systemPrompt: 'Ты — Соколов AI, интеллектуальный помощник на базе DeepSeek. Отвечай на русском языке, будь полезным, дружелюбным и профессиональным.'
+        },
+        'deepseek-coder-6.7b-instruct': {
+            name: 'DeepSeek-Coder',
+            shortName: 'Программист',
+            icon: '💻',
+            description: 'Специализирован на написании и анализе кода',
+            temperature: 0.3,
+            systemPrompt: 'Ты — DeepSeek-Coder, эксперт по программированию. Помогай писать, анализировать и оптимизировать код. Отвечай на русском языке, используй markdown для форматирования кода. Всегда приводи примеры кода, когда это уместно.'
+        }
+    };
     
     // DOM элементы
     const sidebar = document.getElementById('sidebar');
@@ -33,6 +54,56 @@
     const fileInput = document.getElementById('fileInput');
     const clearInputBtn = document.getElementById('clearInputBtn');
     const statusBadge = document.getElementById('statusBadge');
+    const stopBtn = document.getElementById('stopBtn');
+    const modelIndicator = document.getElementById('modelIndicator');
+    const modelIndicatorIcon = document.getElementById('modelIndicatorIcon');
+    const modelIndicatorText = document.getElementById('modelIndicatorText');
+    const welcomeIcon = document.getElementById('welcomeIcon');
+    const welcomeText = document.getElementById('welcomeText');
+    const typingText = document.getElementById('typingText');
+    const modelDescription = document.getElementById('modelDescription');
+    const modelBadge = document.getElementById('modelBadge');
+    
+    // ============================================
+    // УПРАВЛЕНИЕ МОДЕЛЯМИ
+    // ============================================
+    
+    function updateModelUI() {
+        const modelConfig = MODELS[currentModel];
+        if (!modelConfig) return;
+        
+        // Обновляем индикатор в хедере
+        if (modelIndicatorIcon) modelIndicatorIcon.textContent = modelConfig.icon;
+        if (modelIndicatorText) modelIndicatorText.textContent = modelConfig.shortName + ' режим';
+        
+        // Обновляем приветственный экран
+        if (welcomeIcon) welcomeIcon.textContent = modelConfig.icon;
+        if (welcomeText) welcomeText.textContent = modelConfig.description;
+        
+        // Обновляем текст индикатора печати
+        if (typingText) typingText.textContent = modelConfig.name + ' думает...';
+        
+        // Обновляем описание в сайдбаре
+        if (modelDescription) modelDescription.textContent = modelConfig.description;
+        
+        // Обновляем бейдж
+        if (modelBadge) modelBadge.textContent = modelConfig.name;
+        
+        // Сохраняем выбор
+        localStorage.setItem('sokolov_model', currentModel);
+        
+        console.log(`🔄 Модель изменена: ${modelConfig.name} (${currentModel})`);
+    }
+    
+    function switchModel(modelId) {
+        if (MODELS[modelId]) {
+            currentModel = modelId;
+            updateModelUI();
+            
+            // Показываем уведомление
+            showToast(`Переключено на ${MODELS[modelId].name}`, 'info');
+        }
+    }
     
     // ============================================
     // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -110,7 +181,7 @@
     
     function scrollToBottom() {
         setTimeout(() => {
-            const container = document.querySelector('.messages-container-ds, .messages-container');
+            const container = document.querySelector('.messages-container');
             if (container) {
                 container.scrollTop = container.scrollHeight;
             }
@@ -144,25 +215,13 @@
     // ============================================
     
     function showStopButton() {
-        const stopBtn = document.getElementById('stopBtn');
-        const sendBtnElement = document.getElementById('sendBtn');
-        if (stopBtn) {
-            stopBtn.style.display = 'flex';
-        }
-        if (sendBtnElement) {
-            sendBtnElement.style.display = 'none';
-        }
+        if (stopBtn) stopBtn.style.display = 'flex';
+        if (sendBtn) sendBtn.style.display = 'none';
     }
     
     function hideStopButton() {
-        const stopBtn = document.getElementById('stopBtn');
-        const sendBtnElement = document.getElementById('sendBtn');
-        if (stopBtn) {
-            stopBtn.style.display = 'none';
-        }
-        if (sendBtnElement) {
-            sendBtnElement.style.display = 'flex';
-        }
+        if (stopBtn) stopBtn.style.display = 'none';
+        if (sendBtn) sendBtn.style.display = 'flex';
     }
     
     function stopGeneration() {
@@ -194,28 +253,8 @@
         }
     }
     
-    function addStopButton() {
-        const inputWrapper = document.querySelector('.input-wrapper-ds, .input-wrapper');
-        if (!inputWrapper) return;
-        
-        if (document.getElementById('stopBtn')) return;
-        
-        const sendBtnElement = document.getElementById('sendBtn');
-        if (!sendBtnElement) return;
-        
-        const stopBtn = document.createElement('button');
-        stopBtn.id = 'stopBtn';
-        stopBtn.className = 'send-btn-ds stop-btn';
-        stopBtn.innerHTML = '<i class="fas fa-stop"></i>';
-        stopBtn.title = 'Остановить генерацию';
-        stopBtn.style.display = 'none';
-        stopBtn.onclick = stopGeneration;
-        
-        sendBtnElement.parentNode.appendChild(stopBtn);
-    }
-    
     // ============================================
-    // ФОРМАТИРОВАНИЕ СООБЩЕНИЙ С КОДОМ
+    // ФОРМАТИРОВАНИЕ СООБЩЕНИЙ
     // ============================================
     
     function formatMessageWithCode(content) {
@@ -228,10 +267,10 @@
             const escapedCode = escapeHtml(code.trim());
             
             return `
-                <div class="code-block-wrapper-ds code-block-wrapper">
-                    <div class="code-header-ds code-header">
+                <div class="code-block-wrapper">
+                    <div class="code-header">
                         <span class="code-language">${escapeHtml(language)}</span>
-                        <button class="copy-code-btn-ds copy-code-btn" data-code="${escapedCode.replace(/"/g, '&quot;')}" onclick="window.copyCodeBlock(this)">
+                        <button class="copy-code-btn" data-code="${escapedCode.replace(/"/g, '&quot;')}" onclick="window.copyCodeBlock(this)">
                             <i class="fas fa-copy"></i>
                             <span>Копировать код</span>
                         </button>
@@ -254,10 +293,6 @@
         return formatted;
     }
     
-    // ============================================
-    // КОПИРОВАНИЕ КОДА
-    // ============================================
-    
     window.copyCodeBlock = async function(button) {
         const code = button.getAttribute('data-code');
         if (!code) {
@@ -276,7 +311,7 @@
                 button.classList.remove('copied');
             }, 2000);
             
-            showToast('Код скопирован в буфер обмена', 'success');
+            showToast('Код скопирован', 'success');
         } catch (err) {
             const textarea = document.createElement('textarea');
             textarea.value = code;
@@ -299,6 +334,14 @@
         } else {
             chats = [];
         }
+        
+        // Загружаем сохранённую модель
+        const savedModel = localStorage.getItem('sokolov_model');
+        if (savedModel && MODELS[savedModel]) {
+            currentModel = savedModel;
+            if (modelSelect) modelSelect.value = savedModel;
+        }
+        updateModelUI();
     }
     
     function saveChats() {
@@ -320,13 +363,13 @@
         }
         
         chatsList.innerHTML = chats.map(chat => `
-            <div class="chat-item-ds chat-item ${chat.id === currentSessionId ? 'active' : ''}" data-chat-id="${chat.id}">
-                <div class="chat-icon-ds">
+            <div class="chat-item ${chat.id === currentSessionId ? 'active' : ''}" data-chat-id="${chat.id}">
+                <div class="chat-icon">
                     <i class="fas fa-message"></i>
                 </div>
-                <div class="chat-info-ds">
-                    <div class="chat-title-ds">${escapeHtml(chat.title || 'Новый чат')}</div>
-                    <div class="chat-preview-ds">${escapeHtml(chat.messages[chat.messages.length - 1]?.content?.substring(0, 50) || 'Новый чат')}</div>
+                <div class="chat-info">
+                    <div class="chat-title">${escapeHtml(chat.title || 'Новый чат')}</div>
+                    <div class="chat-preview">${escapeHtml(chat.messages[chat.messages.length - 1]?.content?.substring(0, 50) || 'Новый чат')}</div>
                 </div>
                 <div class="chat-date">${formatDate(chat.createdAt)}</div>
                 <button class="chat-delete" data-id="${chat.id}"><i class="fas fa-times"></i></button>
@@ -388,12 +431,12 @@
         const formattedContent = role === 'bot' ? formatMessageWithCode(content) : escapeHtml(content).replace(/\n/g, '<br>');
         
         const messageHtml = `
-            <div class="message-ds message ${role === 'user' ? 'user' : 'bot'}">
-                <div class="message-avatar-ds">
-                    ${role === 'user' ? '<i class="fas fa-user"></i>' : '🤖'}
+            <div class="message ${role === 'user' ? 'user' : 'bot'}">
+                <div class="message-avatar">
+                    ${role === 'user' ? '<i class="fas fa-user"></i>' : MODELS[currentModel]?.icon || '🤖'}
                 </div>
-                <div class="message-content-ds">
-                    <div class="message-bubble-ds">
+                <div class="message-content">
+                    <div class="message-bubble">
                         ${formattedContent}
                     </div>
                 </div>
@@ -436,7 +479,8 @@
                 id: currentSessionId,
                 title: 'Новый чат',
                 createdAt: new Date().toISOString(),
-                messages: []
+                messages: [],
+                model: currentModel
             };
             
             chats.unshift(newChat);
@@ -492,53 +536,10 @@
     }
     
     // ============================================
-    // ОТПРАВКА СООБЩЕНИЙ (СТРИМИНГ + FALLBACK)
+    // ОТПРАВКА СООБЩЕНИЙ
     // ============================================
     
-    async function sendMessageRegular(message) {
-        const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
-        
-        try {
-            console.log('📡 Отправка обычного запроса...');
-            
-            const response = await fetch(`/api/chat/${currentSessionId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: message,
-                    model: selectedModel,
-                    temperature: 1.0
-                })
-            });
-            
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
-            }
-            
-            const data = await response.json();
-            
-            if (data.message) {
-                addMessage('bot', data.message.content);
-                const chat = chats.find(c => c.id === currentSessionId);
-                if (chat) {
-                    chat.messages.push(data.message);
-                    saveChats();
-                }
-            } else if (data.error) {
-                addMessage('bot', `⚠️ Ошибка: ${data.error}`);
-            } else {
-                addMessage('bot', '⚠️ Не удалось получить ответ.');
-            }
-            
-        } catch (error) {
-            console.error('Regular chat error:', error);
-            addMessage('bot', '⚠️ Ошибка соединения. Попробуйте позже.');
-        }
-    }
-    
     async function sendMessageWithStream(message) {
-        const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
-        
         if (currentAbortController) {
             currentAbortController.abort();
         }
@@ -557,23 +558,20 @@
         }, 300000);
         
         try {
-            console.log('📡 Отправка стриминг-запроса...');
+            console.log(`📡 Отправка стриминг-запроса с моделью: ${currentModel}`);
             
             const response = await fetch(`/api/chat/${currentSessionId}/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     message: message,
-                    model: selectedModel,
-                    temperature: 1.0
+                    model: currentModel,
+                    temperature: MODELS[currentModel].temperature
                 }),
                 signal: currentAbortController.signal
             });
             
-            console.log('📡 Статус ответа:', response.status);
-            
             if (!response.ok) {
-                console.warn('⚠️ Стриминг вернул ошибку', response.status, ', пробуем обычный чат');
                 await sendMessageRegular(message);
                 return;
             }
@@ -583,16 +581,14 @@
             
             let botMessageElement = null;
             let fullResponse = '';
-            let hasReceivedData = false;
             
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 
                 const chunk = decoder.decode(value);
-                hasReceivedData = true;
-                
                 const lines = chunk.split('\n');
+                
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         const data = line.slice(6);
@@ -605,12 +601,12 @@
                                 
                                 if (!botMessageElement) {
                                     const messageHtml = `
-                                        <div class="message-ds message bot">
-                                            <div class="message-avatar-ds">
-                                                🤖
+                                        <div class="message bot">
+                                            <div class="message-avatar">
+                                                ${MODELS[currentModel].icon}
                                             </div>
-                                            <div class="message-content-ds">
-                                                <div class="message-bubble-ds" id="streamingMessage"></div>
+                                            <div class="message-content">
+                                                <div class="message-bubble" id="streamingMessage"></div>
                                             </div>
                                         </div>
                                     `;
@@ -640,35 +636,19 @@
                                 currentStreamingMessage = null;
                             }
                             
-                        } catch (e) {
-                            console.warn('Ошибка парсинга JSON:', e);
-                        }
+                        } catch (e) {}
                     }
                     
-                    if (line.startsWith('event: done')) {
-                        break;
-                    }
-                    
+                    if (line.startsWith('event: done')) break;
                     if (line.startsWith('event: error')) {
-                        try {
-                            const errorData = JSON.parse(line.slice(12));
-                            throw new Error(errorData.error);
-                        } catch (e) {
-                            throw new Error('Ошибка потока данных');
-                        }
+                        throw new Error('Ошибка потока данных');
                     }
                 }
-            }
-            
-            if (!hasReceivedData && !fullResponse) {
-                console.warn('⚠️ Нет данных от стриминга, пробуем обычный чат');
-                await sendMessageRegular(message);
             }
             
         } catch (error) {
             console.error('Stream error:', error);
             if (error.name !== 'AbortError') {
-                console.log('🔄 Fallback на обычный чат');
                 await sendMessageRegular(message);
             }
         } finally {
@@ -677,6 +657,45 @@
             isStreaming = false;
             hideStopButton();
             currentStreamingMessage = null;
+        }
+    }
+    
+    async function sendMessageRegular(message) {
+        try {
+            console.log(`📡 Отправка обычного запроса с моделью: ${currentModel}`);
+            
+            const response = await fetch(`/api/chat/${currentSessionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    model: currentModel,
+                    temperature: MODELS[currentModel].temperature
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.message) {
+                addMessage('bot', data.message.content);
+                const chat = chats.find(c => c.id === currentSessionId);
+                if (chat) {
+                    chat.messages.push(data.message);
+                    saveChats();
+                }
+            } else if (data.error) {
+                addMessage('bot', `⚠️ Ошибка: ${data.error}`);
+            } else {
+                addMessage('bot', '⚠️ Не удалось получить ответ.');
+            }
+            
+        } catch (error) {
+            console.error('Regular chat error:', error);
+            addMessage('bot', '⚠️ Ошибка соединения. Попробуйте позже.');
         }
     }
     
@@ -857,11 +876,11 @@
     }
     
     function addVoiceButton() {
-        const inputTools = document.querySelector('.input-tools-ds, .input-tools');
+        const inputTools = document.querySelector('.input-tools');
         if (inputTools && !document.getElementById('recordVoiceBtn')) {
             const voiceBtn = document.createElement('button');
             voiceBtn.id = 'recordVoiceBtn';
-            voiceBtn.className = 'tool-btn-ds tool-btn';
+            voiceBtn.className = 'tool-btn voice-btn';
             voiceBtn.innerHTML = '<i class="fas fa-microphone"></i>';
             voiceBtn.title = 'Голосовой ввод';
             voiceBtn.onclick = () => {
@@ -902,7 +921,6 @@
         }
         
         setupEventListeners();
-        addStopButton();
         
         window.themeManager = new ThemeManager();
         
@@ -917,6 +935,7 @@
     
     function setupEventListeners() {
         sendBtn?.addEventListener('click', sendMessage);
+        stopBtn?.addEventListener('click', stopGeneration);
         
         messageInput?.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -975,11 +994,11 @@
             adjustTextareaHeight();
         });
         
-        modelSelect?.addEventListener('change', () => {
-            showToast(`Модель: ${modelSelect.options[modelSelect.selectedIndex].text}`, 'info');
+        modelSelect?.addEventListener('change', (e) => {
+            switchModel(e.target.value);
         });
         
-        document.querySelectorAll('.suggestion-btn-ds, .suggestion-btn').forEach(btn => {
+        document.querySelectorAll('.suggestion-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const prompt = btn.dataset.prompt;
                 if (prompt) {
