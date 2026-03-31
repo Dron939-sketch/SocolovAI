@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: sokolov-ai
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DEEPSEEK_API_KEY
+        sync: false  # Будет запрошена при деплое
+      - key: DEEPSEEK_API_URL
+        value: https://api.deepseek.com/v1/chat/completions
+      - key: CORS_ORIGIN
+        value: https://sokolov-ai.onrender.com
+      - key: RATE_LIMIT_WINDOW_MS
+        value: 900000
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: 100
+      - key: DEFAULT_MODEL
+        value: deepseek-chat
+      - key: MAX_TOKENS
+        value: 4096
+      - key: TEMPERATURE
+        value: 0.7
+      - key: SYSTEM_PROMPT
+        value: "Ты — Соколов AI, интеллектуальный помощник на базе DeepSeek. Отвечай на русском языке, будь полезным, дружелюбным и профессиональным. Помогай с программированием, анализом кода и ответами на вопросы."
