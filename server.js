@@ -1,6 +1,6 @@
 // ============================================
 // СОКОЛОВ AI - ПОЛНЫЙ СЕРВЕР
-// Исправлен: QUIC ошибки, улучшенный streaming, таймауты
+// Исправлен: полное отключение QUIC, улучшенный streaming
 // ============================================
 
 require('dotenv').config();
@@ -16,16 +16,18 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ============================================
-// ОТКЛЮЧЕНИЕ HTTP/3 И QUIC (фикс ошибок)
+// ПРИНУДИТЕЛЬНОЕ ОТКЛЮЧЕНИЕ HTTP/2 и QUIC
 // ============================================
 
+// Запрещаем keep-alive и HTTP/2
 app.disable('etag');
 app.set('trust proxy', true);
 
-// Заголовки для стабильности соединения
+// Middleware для принудительного использования HTTP/1.1
 app.use((req, res, next) => {
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Keep-Alive', 'timeout=5, max=100');
+    // Запрещаем upgrade до HTTP/2
+    res.setHeader('Connection', 'close');
+    res.setHeader('X-HTTP2-Stream-ID', '');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     next();
 });
@@ -41,16 +43,14 @@ if (!fs.existsSync(uploadDir)) {
 
 const upload = multer({ 
     dest: uploadDir,
-    limits: {
-        fileSize: 50 * 1024 * 1024 // 50MB
-    }
+    limits: { fileSize: 50 * 1024 * 1024 }
 });
 
 // ============================================
 // MIDDLEWARE
 // ============================================
 
-// Логирование всех запросов
+// Логирование
 app.use((req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
@@ -95,7 +95,7 @@ function getSession(sessionId) {
     return session;
 }
 
-// Очистка старых сессий (каждые 6 часов)
+// Очистка старых сессий
 setInterval(() => {
     const now = Date.now();
     const SESSION_TTL = 24 * 60 * 60 * 1000;
@@ -107,16 +107,13 @@ setInterval(() => {
             deleted++;
         }
     }
-    if (deleted > 0) {
-        console.log(`🗑️ Очищено ${deleted} устаревших сессий`);
-    }
+    if (deleted > 0) console.log(`🗑️ Очищено ${deleted} устаревших сессий`);
 }, 6 * 60 * 60 * 1000);
 
 // ============================================
 // API ENDPOINTS
 // ============================================
 
-// Health check
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
@@ -129,7 +126,6 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Создать новую сессию
 app.post('/api/session', (req, res) => {
     const sessionId = uuidv4();
     const session = {
@@ -143,7 +139,6 @@ app.post('/api/session', (req, res) => {
     res.json({ sessionId, createdAt: session.createdAt });
 });
 
-// Получить историю чата
 app.get('/api/chat/:sessionId', (req, res) => {
     const { sessionId } = req.params;
     const session = getSession(sessionId);
@@ -151,7 +146,7 @@ app.get('/api/chat/:sessionId', (req, res) => {
 });
 
 // ============================================
-// ПОТОКОВАЯ ПЕРЕДАЧА - ИСПРАВЛЕННАЯ ВЕРСИЯ
+// ПОТОКОВАЯ ПЕРЕДАЧА (исправленная)
 // ============================================
 
 app.post('/api/chat/:sessionId/stream', async (req, res) => {
@@ -174,11 +169,11 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
     };
     session.messages.push(userMessage);
     
-    // Настройка SSE с правильными заголовками для Render
+    // Настройка SSE с принудительным отключением буферизации
     res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
+        'Connection': 'close',                    // вместо keep-alive
         'X-Accel-Buffering': 'no',
         'Transfer-Encoding': 'chunked'
     });
@@ -202,19 +197,20 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
         ...session.messages.map(m => ({ role: m.role, content: m.content }))
     ];
     
+    // Создаем HTTP агент с полным отключением keep-alive
+    const http = require('http');
+    const https = require('https');
+    
+    const agent = new https.Agent({
+        keepAlive: false,
+        maxSockets: 1,
+        maxFreeSockets: 0,
+        timeout: 120000,
+        rejectUnauthorized: true
+    });
+    
     try {
         console.log(`📤 Отправка потокового запроса в DeepSeek...`);
-        
-        // Создаем HTTP агент с отключенным keep-alive для стабильности
-        const http = require('http');
-        const https = require('https');
-        
-        const agent = new https.Agent({
-            keepAlive: false,
-            maxSockets: 1,
-            maxFreeSockets: 0,
-            timeout: 120000
-        });
         
         const response = await axios({
             method: 'POST',
@@ -229,7 +225,8 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
             headers: {
                 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json',
-                'Accept': 'text/event-stream'
+                'Accept': 'text/event-stream',
+                'Connection': 'close'
             },
             responseType: 'stream',
             timeout: 120000,
@@ -430,7 +427,6 @@ app.post('/api/analyze-code', upload.single('file'), async (req, res) => {
         });
     }
     
-    // Ограничиваем длину
     const MAX_CODE_LENGTH = 50000;
     let wasTruncated = false;
     if (codeContent.length > MAX_CODE_LENGTH) {
