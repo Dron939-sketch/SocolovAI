@@ -1,5 +1,6 @@
 // ============================================
 // СОКОЛОВ AI - СЕРВЕРНАЯ ЧАСТЬ
+// Оптимизировано для деплоя на Render
 // ============================================
 
 require('dotenv').config();
@@ -16,13 +17,20 @@ const path = require('path');
 // Инициализация
 const app = express();
 const PORT = process.env.PORT || 3000;
-const upload = multer({ dest: 'uploads/' });
+
+// Создаем папку для загрузок (для Render)
+const uploadDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const upload = multer({ dest: uploadDir });
 
 // ============================================
 // MIDDLEWARE
 // ============================================
 
-// Безопасность
+// Безопасность (настроено для Render)
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
@@ -31,13 +39,15 @@ app.use(helmet({
             fontSrc: ["'self'", "https://fonts.gstatic.com"],
             scriptSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", "data:", "https:"],
+            connectSrc: ["'self'", "https://api.deepseek.com"],
         },
     },
+    crossOriginEmbedderPolicy: false,
 }));
 
-// CORS
+// CORS для Render
 app.use(cors({
-    origin: process.env.CORS_ORIGIN?.split(',') || '*',
+    origin: process.env.CORS_ORIGIN?.split(',') || ['https://sokolov-ai.onrender.com', 'http://localhost:3000'],
     credentials: true
 }));
 
@@ -48,23 +58,36 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Статические файлы
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Rate limiting
+// Rate limiting для защиты от злоупотреблений
 const limiter = rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000,
     max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-    message: { error: 'Слишком много запросов. Попробуйте позже.' }
+    message: { error: 'Слишком много запросов. Попробуйте позже.' },
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 app.use('/api/', limiter);
 
 // ============================================
-// ХРАНИЛИЩЕ ЧАТОВ (в памяти, для демо)
+// ХРАНИЛИЩЕ СЕССИЙ (в памяти)
+// Для production лучше использовать Redis, но для Render free хватит
 // ============================================
 
 const sessions = new Map();
 
-// ============================================
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-// ============================================
+// Очистка старых сессий каждые 6 часов
+setInterval(() => {
+    const now = Date.now();
+    const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 часа
+    
+    for (const [id, session] of sessions) {
+        const lastActivity = new Date(session.lastActivity).getTime();
+        if (now - lastActivity > SESSION_TTL) {
+            sessions.delete(id);
+            console.log(`🗑️ Session ${id} expired`);
+        }
+    }
+}, 6 * 60 * 60 * 1000);
 
 function getSession(sessionId) {
     if (!sessions.has(sessionId)) {
@@ -75,36 +98,31 @@ function getSession(sessionId) {
             lastActivity: new Date()
         });
     }
-    return sessions.get(sessionId);
-}
-
-function saveSession(sessionId, session) {
+    const session = sessions.get(sessionId);
     session.lastActivity = new Date();
-    sessions.set(sessionId, session);
+    return session;
 }
-
-// Очистка старых сессий (раз в час)
-setInterval(() => {
-    const now = new Date();
-    for (const [id, session] of sessions) {
-        if (now - session.lastActivity > 24 * 60 * 60 * 1000) {
-            sessions.delete(id);
-        }
-    }
-}, 60 * 60 * 1000);
 
 // ============================================
 // API ENDPOINTS
 // ============================================
 
-// Health check
+// Health check для Render
 app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
+    res.json({
+        status: 'healthy',
         name: 'Соколов AI',
         version: '1.0.0',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        sessions: sessions.size
     });
+});
+
+// Корневой маршрут
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // Создать новую сессию
@@ -117,7 +135,7 @@ app.post('/api/session', (req, res) => {
         lastActivity: new Date()
     };
     sessions.set(sessionId, session);
-    res.json({ sessionId });
+    res.json({ sessionId, createdAt: session.createdAt });
 });
 
 // Получить историю чата
@@ -127,7 +145,7 @@ app.get('/api/chat/:sessionId', (req, res) => {
     res.json({ messages: session.messages });
 });
 
-// Отправить сообщение
+// Отправить сообщение (без streaming)
 app.post('/api/chat/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
     const { message, model = process.env.DEFAULT_MODEL, temperature = parseFloat(process.env.TEMPERATURE) } = req.body;
@@ -149,28 +167,27 @@ app.post('/api/chat/:sessionId', async (req, res) => {
     
     // Формируем запрос к DeepSeek
     const messages = [
-        { role: 'system', content: process.env.SYSTEM_PROMPT },
+        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник.' },
         ...session.messages.map(m => ({ role: m.role, content: m.content }))
     ];
     
     try {
-        // Отправляем запрос к DeepSeek API
         const response = await axios.post(process.env.DEEPSEEK_API_URL, {
             model: model,
             messages: messages,
-            max_tokens: parseInt(process.env.MAX_TOKENS),
+            max_tokens: parseInt(process.env.MAX_TOKENS) || 4096,
             temperature: temperature,
             stream: false
         }, {
             headers: {
                 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json'
-            }
+            },
+            timeout: 60000
         });
         
         const aiResponse = response.data.choices[0].message.content;
         
-        // Добавляем ответ AI
         const aiMessage = {
             id: uuidv4(),
             role: 'assistant',
@@ -180,8 +197,6 @@ app.post('/api/chat/:sessionId', async (req, res) => {
         };
         session.messages.push(aiMessage);
         
-        saveSession(sessionId, session);
-        
         res.json({
             message: aiMessage,
             usage: response.data.usage
@@ -190,7 +205,6 @@ app.post('/api/chat/:sessionId', async (req, res) => {
     } catch (error) {
         console.error('DeepSeek API error:', error.response?.data || error.message);
         
-        // Возвращаем дружелюбную ошибку
         const errorMessage = {
             id: uuidv4(),
             role: 'assistant',
@@ -199,11 +213,11 @@ app.post('/api/chat/:sessionId', async (req, res) => {
             isError: true
         };
         session.messages.push(errorMessage);
-        saveSession(sessionId, session);
         
         res.status(500).json({ 
             error: 'Ошибка при обращении к AI',
-            message: errorMessage
+            message: errorMessage,
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
@@ -219,7 +233,6 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
     
     const session = getSession(sessionId);
     
-    // Добавляем сообщение пользователя
     const userMessage = {
         id: uuidv4(),
         role: 'user',
@@ -235,7 +248,7 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     
     const messages = [
-        { role: 'system', content: process.env.SYSTEM_PROMPT },
+        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник.' },
         ...session.messages.map(m => ({ role: m.role, content: m.content }))
     ];
     
@@ -243,7 +256,7 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
         const response = await axios.post(process.env.DEEPSEEK_API_URL, {
             model: model,
             messages: messages,
-            max_tokens: parseInt(process.env.MAX_TOKENS),
+            max_tokens: parseInt(process.env.MAX_TOKENS) || 4096,
             temperature: temperature,
             stream: true
         }, {
@@ -251,7 +264,8 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
                 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            responseType: 'stream'
+            responseType: 'stream',
+            timeout: 120000
         });
         
         let fullResponse = '';
@@ -262,7 +276,6 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
                 if (line.startsWith('data: ')) {
                     const data = line.slice(6);
                     if (data === '[DONE]') {
-                        // Сохраняем полный ответ
                         const aiMessage = {
                             id: uuidv4(),
                             role: 'assistant',
@@ -270,7 +283,6 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
                             timestamp: new Date().toISOString()
                         };
                         session.messages.push(aiMessage);
-                        saveSession(sessionId, session);
                         res.write(`event: done\ndata: ${JSON.stringify({ fullResponse })}\n\n`);
                         res.end();
                         return;
@@ -283,7 +295,7 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
                             res.write(`data: ${JSON.stringify({ content, done: false })}\n\n`);
                         }
                     } catch (e) {
-                        // Пропускаем некорректные данные
+                        // Пропускаем
                     }
                 }
             }
@@ -295,6 +307,18 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
             res.end();
         });
         
+        response.data.on('end', () => {
+            if (fullResponse) {
+                const aiMessage = {
+                    id: uuidv4(),
+                    role: 'assistant',
+                    content: fullResponse,
+                    timestamp: new Date().toISOString()
+                };
+                session.messages.push(aiMessage);
+            }
+        });
+        
     } catch (error) {
         console.error('DeepSeek API stream error:', error);
         res.write(`event: error\ndata: ${JSON.stringify({ error: 'Ошибка соединения с AI' })}\n\n`);
@@ -304,22 +328,31 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
 
 // Анализ кода
 app.post('/api/analyze-code', upload.single('file'), async (req, res) => {
-    const { code, language, sessionId } = req.body;
-    let codeContent = code;
+    let codeContent = req.body.code;
+    let language = req.body.language || 'javascript';
     
-    // Если загружен файл
     if (req.file) {
-        codeContent = fs.readFileSync(req.file.path, 'utf-8');
-        fs.unlinkSync(req.file.path);
+        try {
+            codeContent = fs.readFileSync(req.file.path, 'utf-8');
+            language = req.file.originalname.split('.').pop();
+            fs.unlinkSync(req.file.path);
+        } catch (error) {
+            console.error('File read error:', error);
+        }
     }
     
     if (!codeContent) {
         return res.status(400).json({ error: 'Код не предоставлен' });
     }
     
-    const prompt = `Проанализируй этот код на ${language || 'JavaScript'}:
+    // Ограничиваем длину для API
+    if (codeContent.length > 50000) {
+        codeContent = codeContent.substring(0, 50000) + '\n... (код обрезан)';
+    }
+    
+    const prompt = `Проанализируй этот код на ${language}:
 
-\`\`\`${language || 'javascript'}
+\`\`\`${language}
 ${codeContent}
 \`\`\`
 
@@ -329,13 +362,13 @@ ${codeContent}
 3. Рекомендации по улучшению
 4. Пример исправленного фрагмента (если нужно)
 
-Отвечай на русском языке.`;
+Отвечай на русском языке, структурированно.`;
 
     try {
         const response = await axios.post(process.env.DEEPSEEK_API_URL, {
             model: process.env.DEFAULT_MODEL,
             messages: [
-                { role: 'system', content: 'Ты эксперт по анализу кода. Отвечай структурированно и подробно.' },
+                { role: 'system', content: 'Ты эксперт по анализу кода. Отвечай структурированно и подробно на русском языке.' },
                 { role: 'user', content: prompt }
             ],
             max_tokens: 8192,
@@ -344,7 +377,8 @@ ${codeContent}
             headers: {
                 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json'
-            }
+            },
+            timeout: 90000
         });
         
         res.json({
@@ -353,19 +387,34 @@ ${codeContent}
         });
         
     } catch (error) {
-        console.error('Code analysis error:', error);
+        console.error('Code analysis error:', error.response?.data || error.message);
         res.status(500).json({ error: 'Ошибка анализа кода' });
     }
 });
 
 // Голосовое распознавание (прокси)
 app.post('/api/voice/process', upload.single('voice'), async (req, res) => {
-    // Здесь можно интегрировать с сервисом распознавания речи
-    // Пока возвращаем заглушку
+    const text = req.body.text || '';
+    
+    if (text) {
+        res.json({
+            success: true,
+            recognized_text: text,
+            answer: `Вы сказали: "${text}". Как я могу помочь?`
+        });
+        return;
+    }
+    
+    if (req.file) {
+        try {
+            fs.unlinkSync(req.file.path);
+        } catch (e) {}
+    }
+    
     res.json({
         success: true,
-        recognized_text: req.body.text || 'Голосовое сообщение получено',
-        answer: 'Ваше голосовое сообщение получено. Функция полного распознавания в разработке.'
+        recognized_text: 'Голосовое сообщение получено',
+        answer: 'Голосовое сообщение получено. Функция полного распознавания в разработке.'
     });
 });
 
@@ -380,24 +429,36 @@ app.delete('/api/chat/:sessionId', (req, res) => {
     }
 });
 
+// Обработка 404
+app.use((req, res) => {
+    res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Обработка ошибок
+app.use((err, req, res, next) => {
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+});
+
 // ============================================
 // ЗАПУСК СЕРВЕРА
 // ============================================
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    ╔══════════════════════════════════════════════════════════╗
-    ║                                                          ║
-    ║     🦅 СОКОЛОВ AI - СЕРВЕР ЗАПУЩЕН                       ║
-    ║                                                          ║
-    ║     📡 Порт: ${PORT}                                          ║
-    ║     🌐 Режим: ${process.env.NODE_ENV || 'development'}                          ║
-    ║     🤖 Модель: ${process.env.DEFAULT_MODEL}                              ║
-    ║                                                          ║
-    ║     🚀 Готов к работе!                                   ║
-    ║     📍 http://localhost:${PORT}                                 ║
-    ║                                                          ║
-    ╚════════════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════════════════════════════════╗
+    ║                                                                  ║
+    ║     🦅 СОКОЛОВ AI - СЕРВЕР ЗАПУЩЕН                               ║
+    ║                                                                  ║
+    ║     📡 Порт: ${PORT}                                                 ║
+    ║     🌐 Режим: ${process.env.NODE_ENV || 'development'}                                    ║
+    ║     🤖 Модель: ${process.env.DEFAULT_MODEL || 'deepseek-chat'}                               ║
+    ║     💾 Сессий: ${sessions.size}                                                  ║
+    ║                                                                  ║
+    ║     🚀 Готов к работе!                                           ║
+    ║     📍 http://localhost:${PORT}                                           ║
+    ║                                                                  ║
+    ╚══════════════════════════════════════════════════════════════════╝
     `);
 });
 
