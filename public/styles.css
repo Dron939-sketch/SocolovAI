@@ -1,13 +1,26 @@
 /* ============================================
    СОКОЛОВ AI - ПОЛНЫЕ СТИЛИ
-   Тёмная тема, адаптивность, анимации
+   Тёмная и светлая темы, адаптивность, анимации
    ============================================ */
 
 /* ============================================
-   ПЕРЕМЕННЫЕ
+   ПЛАВНЫЙ ПЕРЕХОД ДЛЯ СМЕНЫ ТЕМЫ
    ============================================ */
 
-:root {
+.theme-transition,
+.theme-transition * {
+    transition: background-color 0.2s ease,
+                border-color 0.2s ease,
+                color 0.2s ease,
+                box-shadow 0.2s ease;
+}
+
+/* ============================================
+   ПЕРЕМЕННЫЕ ТЁМНОЙ ТЕМЫ (по умолчанию)
+   ============================================ */
+
+:root,
+[data-theme="dark"] {
     /* Основные цвета */
     --bg-primary: #0a0a0a;
     --bg-secondary: #111111;
@@ -39,8 +52,6 @@
     /* Сообщения */
     --message-user-bg: linear-gradient(135deg, #1a2a3a, #0f1a24);
     --message-bot-bg: #111111;
-    --message-user-border: #e67e22;
-    --message-bot-border: #2a2a2a;
     
     /* Тени */
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
@@ -48,10 +59,57 @@
     --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.5);
     --shadow-glow: 0 0 20px rgba(230, 126, 34, 0.2);
     
-    /* Анимации */
-    --transition-fast: 0.15s ease;
-    --transition-normal: 0.25s ease;
-    --transition-slow: 0.4s ease;
+    /* Скроллбар */
+    --scrollbar-track: #1a1a1a;
+    --scrollbar-thumb: #e67e22;
+}
+
+/* ============================================
+   ПЕРЕМЕННЫЕ СВЕТЛОЙ ТЕМЫ
+   ============================================ */
+
+[data-theme="light"] {
+    /* Основные цвета */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f9fa;
+    --bg-tertiary: #f1f3f5;
+    --bg-hover: #e9ecef;
+    --bg-code: #f6f8fa;
+    
+    /* Текст */
+    --text-primary: #1a1a2e;
+    --text-secondary: #495057;
+    --text-muted: #6c757d;
+    
+    /* Акцентные цвета (сохраняем оранжевую гамму) */
+    --accent-primary: #e67e22;
+    --accent-secondary: #f39c12;
+    --accent-glow: rgba(230, 126, 34, 0.15);
+    --accent-hover: #e67e22;
+    
+    /* Статусы */
+    --success: #10b981;
+    --error: #ef4444;
+    --warning: #f59e0b;
+    --info: #3b82f6;
+    
+    /* Границы */
+    --border-color: #dee2e6;
+    --border-light: #e9ecef;
+    
+    /* Сообщения */
+    --message-user-bg: linear-gradient(135deg, #fff3e0, #ffe8cc);
+    --message-bot-bg: #f8f9fa;
+    
+    /* Тени */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.07);
+    --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+    --shadow-glow: 0 0 20px rgba(230, 126, 34, 0.15);
+    
+    /* Скроллбар */
+    --scrollbar-track: #e9ecef;
+    --scrollbar-thumb: #e67e22;
 }
 
 /* ============================================
@@ -372,6 +430,10 @@ body {
     z-index: 10;
 }
 
+[data-theme="light"] .chat-header {
+    background: rgba(255, 255, 255, 0.8);
+}
+
 .menu-toggle {
     display: none;
     background: none;
@@ -441,6 +503,33 @@ body {
     color: var(--accent-primary);
 }
 
+/* Кнопка переключения темы */
+.theme-toggle {
+    background: none;
+    border: none;
+    font-size: 18px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 8px;
+    transition: all var(--transition-fast);
+}
+
+.theme-toggle:hover {
+    background: var(--bg-tertiary);
+    color: var(--accent-primary);
+    transform: rotate(15deg);
+}
+
+.theme-toggle.switching i {
+    animation: themeSpin 0.5s ease;
+}
+
+@keyframes themeSpin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
 .model-selector select {
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
@@ -473,17 +562,17 @@ body {
 }
 
 .messages-container::-webkit-scrollbar-track {
-    background: var(--bg-tertiary);
+    background: var(--scrollbar-track);
     border-radius: 3px;
 }
 
 .messages-container::-webkit-scrollbar-thumb {
-    background: var(--accent-primary);
+    background: var(--scrollbar-thumb);
     border-radius: 3px;
 }
 
 .messages-container::-webkit-scrollbar-thumb:hover {
-    background: var(--accent-secondary);
+    background: var(--accent-hover);
 }
 
 /* Welcome Screen */
@@ -593,6 +682,7 @@ body {
     background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
     border-color: transparent;
     transform: translateY(-2px);
+    color: white;
 }
 
 /* Сообщения */
@@ -1022,6 +1112,10 @@ textarea::placeholder {
     animation: modalFadeIn 0.3s ease;
 }
 
+[data-theme="light"] .voice-modal {
+    background: rgba(255, 255, 255, 0.95);
+}
+
 @keyframes modalFadeIn {
     from {
         opacity: 0;
@@ -1042,6 +1136,11 @@ textarea::placeholder {
     width: 90%;
     border: 1px solid rgba(230, 126, 34, 0.3);
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+[data-theme="light"] .voice-modal-content {
+    background: linear-gradient(135deg, #ffffff, #f8f9fa);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.1);
 }
 
 .voice-circle {
@@ -1096,7 +1195,7 @@ textarea::placeholder {
     font-size: 48px;
     font-weight: 600;
     font-family: monospace;
-    color: white;
+    color: var(--text-primary);
     margin-bottom: 30px;
     letter-spacing: 2px;
 }
@@ -1123,8 +1222,17 @@ textarea::placeholder {
     color: #fff;
 }
 
+[data-theme="light"] .voice-cancel-btn {
+    background: rgba(0, 0, 0, 0.1);
+    color: var(--text-primary);
+}
+
 .voice-cancel-btn:hover {
     background: rgba(255, 255, 255, 0.2);
+}
+
+[data-theme="light"] .voice-cancel-btn:hover {
+    background: rgba(0, 0, 0, 0.2);
 }
 
 .voice-stop-btn {
@@ -1140,6 +1248,10 @@ textarea::placeholder {
 .voice-hint {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.6);
+}
+
+[data-theme="light"] .voice-hint {
+    color: var(--text-secondary);
 }
 
 .voice-hint i {
