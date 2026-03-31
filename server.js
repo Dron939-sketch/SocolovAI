@@ -1,53 +1,34 @@
 // ============================================
 // СОКОЛОВ AI - СЕРВЕРНАЯ ЧАСТЬ
-// Оптимизировано для деплоя на Render
+// Исправленная версия для Render
 // ============================================
 
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
+const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 const multer = require('multer');
-const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
-const path = require('path');
 
-// Инициализация
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Создаем папку для загрузок (для Render)
+// Создаем папку для загрузок
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) {
     fs.mkdirSync(uploadDir, { recursive: true });
 }
-
 const upload = multer({ dest: uploadDir });
 
 // ============================================
 // MIDDLEWARE
 // ============================================
 
-// Безопасность (настроено для Render)
-app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-            fontSrc: ["'self'", "https://fonts.gstatic.com"],
-            scriptSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", "data:", "https:"],
-            connectSrc: ["'self'", "https://api.deepseek.com"],
-        },
-    },
-    crossOriginEmbedderPolicy: false,
-}));
-
-// CORS для Render
+// CORS - важно для API запросов
 app.use(cors({
-    origin: process.env.CORS_ORIGIN?.split(',') || ['https://sokolov-ai.onrender.com', 'http://localhost:3000'],
+    origin: '*', // Для разработки, в production ограничьте
     credentials: true
 }));
 
@@ -58,36 +39,11 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 // Статические файлы
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Rate limiting для защиты от злоупотреблений
-const limiter = rateLimit({
-    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000,
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
-    message: { error: 'Слишком много запросов. Попробуйте позже.' },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-app.use('/api/', limiter);
-
 // ============================================
-// ХРАНИЛИЩЕ СЕССИЙ (в памяти)
-// Для production лучше использовать Redis, но для Render free хватит
+// ХРАНИЛИЩЕ СЕССИЙ
 // ============================================
 
 const sessions = new Map();
-
-// Очистка старых сессий каждые 6 часов
-setInterval(() => {
-    const now = Date.now();
-    const SESSION_TTL = 24 * 60 * 60 * 1000; // 24 часа
-    
-    for (const [id, session] of sessions) {
-        const lastActivity = new Date(session.lastActivity).getTime();
-        if (now - lastActivity > SESSION_TTL) {
-            sessions.delete(id);
-            console.log(`🗑️ Session ${id} expired`);
-        }
-    }
-}, 6 * 60 * 60 * 1000);
 
 function getSession(sessionId) {
     if (!sessions.has(sessionId)) {
@@ -104,29 +60,24 @@ function getSession(sessionId) {
 }
 
 // ============================================
-// API ENDPOINTS
+// API ENDPOINTS (ДОЛЖНЫ БЫТЬ ДО СТАТИКИ)
 // ============================================
 
-// Health check для Render
+// Health check
 app.get('/api/health', (req, res) => {
+    console.log('✅ Health check called');
     res.json({
-        status: 'healthy',
+        status: 'ok',
         name: 'Соколов AI',
         version: '1.0.0',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        memory: process.memoryUsage(),
         sessions: sessions.size
     });
 });
 
-// Корневой маршрут
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
 // Создать новую сессию
 app.post('/api/session', (req, res) => {
+    console.log('📝 Creating new session');
     const sessionId = uuidv4();
     const session = {
         id: sessionId,
@@ -135,20 +86,32 @@ app.post('/api/session', (req, res) => {
         lastActivity: new Date()
     };
     sessions.set(sessionId, session);
-    res.json({ sessionId, createdAt: session.createdAt });
+    res.json({ 
+        sessionId, 
+        createdAt: session.createdAt,
+        message: 'Session created'
+    });
 });
 
 // Получить историю чата
 app.get('/api/chat/:sessionId', (req, res) => {
     const { sessionId } = req.params;
+    console.log(`📖 Getting chat history for ${sessionId}`);
+    
+    if (!sessions.has(sessionId)) {
+        return res.json({ messages: [] });
+    }
+    
     const session = getSession(sessionId);
     res.json({ messages: session.messages });
 });
 
-// Отправить сообщение (без streaming)
+// Отправить сообщение
 app.post('/api/chat/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
-    const { message, model = process.env.DEFAULT_MODEL, temperature = parseFloat(process.env.TEMPERATURE) } = req.body;
+    const { message, model = 'deepseek-chat', temperature = 0.7 } = req.body;
+    
+    console.log(`💬 Received message for ${sessionId}: ${message?.substring(0, 50)}...`);
     
     if (!message || message.trim() === '') {
         return res.status(400).json({ error: 'Сообщение не может быть пустым' });
@@ -165,19 +128,33 @@ app.post('/api/chat/:sessionId', async (req, res) => {
     };
     session.messages.push(userMessage);
     
+    // Если нет API ключа, возвращаем заглушку
+    if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY === 'your_api_key_here') {
+        const mockResponse = `🦅 **Соколов AI** отвечает:\n\nВы написали: "${message}"\n\n⚠️ **Внимание:** API ключ DeepSeek не настроен. Добавьте переменную окружения DEEPSEEK_API_KEY в настройках Render.\n\nПример ответа AI: Это тестовый режим. После настройки API ключа я буду давать полноценные ответы.`;
+        
+        const aiMessage = {
+            id: uuidv4(),
+            role: 'assistant',
+            content: mockResponse,
+            timestamp: new Date().toISOString()
+        };
+        session.messages.push(aiMessage);
+        
+        return res.json({ message: aiMessage });
+    }
+    
     // Формируем запрос к DeepSeek
     const messages = [
-        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник.' },
+        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник. Отвечай на русском языке.' },
         ...session.messages.map(m => ({ role: m.role, content: m.content }))
     ];
     
     try {
-        const response = await axios.post(process.env.DEEPSEEK_API_URL, {
+        const response = await axios.post('https://api.deepseek.com/v1/chat/completions', {
             model: model,
             messages: messages,
-            max_tokens: parseInt(process.env.MAX_TOKENS) || 4096,
-            temperature: temperature,
-            stream: false
+            max_tokens: 4096,
+            temperature: temperature
         }, {
             headers: {
                 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
@@ -197,10 +174,7 @@ app.post('/api/chat/:sessionId', async (req, res) => {
         };
         session.messages.push(aiMessage);
         
-        res.json({
-            message: aiMessage,
-            usage: response.data.usage
-        });
+        res.json({ message: aiMessage, usage: response.data.usage });
         
     } catch (error) {
         console.error('DeepSeek API error:', error.response?.data || error.message);
@@ -208,24 +182,22 @@ app.post('/api/chat/:sessionId', async (req, res) => {
         const errorMessage = {
             id: uuidv4(),
             role: 'assistant',
-            content: 'Извините, произошла ошибка при обработке запроса. Пожалуйста, попробуйте позже.',
+            content: `⚠️ **Ошибка API:** ${error.response?.data?.error?.message || error.message}\n\nПроверьте настройки API ключа в переменных окружения Render.`,
             timestamp: new Date().toISOString(),
             isError: true
         };
         session.messages.push(errorMessage);
         
-        res.status(500).json({ 
-            error: 'Ошибка при обращении к AI',
-            message: errorMessage,
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
+        res.status(500).json({ error: 'Ошибка при обращении к AI', message: errorMessage });
     }
 });
 
-// Потоковая передача (Streaming)
+// Потоковая передача
 app.post('/api/chat/:sessionId/stream', async (req, res) => {
     const { sessionId } = req.params;
-    const { message, model = process.env.DEFAULT_MODEL, temperature = parseFloat(process.env.TEMPERATURE) } = req.body;
+    const { message, model = 'deepseek-chat', temperature = 0.7 } = req.body;
+    
+    console.log(`📡 Stream request for ${sessionId}`);
     
     if (!message || message.trim() === '') {
         return res.status(400).json({ error: 'Сообщение не может быть пустым' });
@@ -241,22 +213,34 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
     };
     session.messages.push(userMessage);
     
-    // Настройки SSE
+    // SSE Headers
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
-    res.setHeader('X-Accel-Buffering', 'no');
+    
+    // Если нет API ключа
+    if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY === 'your_api_key_here') {
+        const mockResponse = `🦅 **Соколов AI** отвечает:\n\nВы написали: "${message}"\n\n⚠️ **API ключ не настроен.** Добавьте DEEPSEEK_API_KEY в переменные окружения.`;
+        
+        for (let i = 0; i < mockResponse.length; i++) {
+            res.write(`data: ${JSON.stringify({ content: mockResponse[i], done: false })}\n\n`);
+            await new Promise(r => setTimeout(r, 10));
+        }
+        res.write(`event: done\ndata: ${JSON.stringify({ fullResponse: mockResponse })}\n\n`);
+        res.end();
+        return;
+    }
     
     const messages = [
-        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник.' },
+        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник. Отвечай на русском языке.' },
         ...session.messages.map(m => ({ role: m.role, content: m.content }))
     ];
     
     try {
-        const response = await axios.post(process.env.DEEPSEEK_API_URL, {
+        const response = await axios.post('https://api.deepseek.com/v1/chat/completions', {
             model: model,
             messages: messages,
-            max_tokens: parseInt(process.env.MAX_TOKENS) || 4096,
+            max_tokens: 4096,
             temperature: temperature,
             stream: true
         }, {
@@ -294,40 +278,28 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
                             fullResponse += content;
                             res.write(`data: ${JSON.stringify({ content, done: false })}\n\n`);
                         }
-                    } catch (e) {
-                        // Пропускаем
-                    }
+                    } catch (e) {}
                 }
             }
         });
         
         response.data.on('error', (error) => {
             console.error('Stream error:', error);
-            res.write(`event: error\ndata: ${JSON.stringify({ error: 'Ошибка потока' })}\n\n`);
+            res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
             res.end();
         });
         
-        response.data.on('end', () => {
-            if (fullResponse) {
-                const aiMessage = {
-                    id: uuidv4(),
-                    role: 'assistant',
-                    content: fullResponse,
-                    timestamp: new Date().toISOString()
-                };
-                session.messages.push(aiMessage);
-            }
-        });
-        
     } catch (error) {
-        console.error('DeepSeek API stream error:', error);
-        res.write(`event: error\ndata: ${JSON.stringify({ error: 'Ошибка соединения с AI' })}\n\n`);
+        console.error('Stream error:', error);
+        res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
         res.end();
     }
 });
 
 // Анализ кода
 app.post('/api/analyze-code', upload.single('file'), async (req, res) => {
+    console.log('🔍 Code analysis request');
+    
     let codeContent = req.body.code;
     let language = req.body.language || 'javascript';
     
@@ -345,7 +317,6 @@ app.post('/api/analyze-code', upload.single('file'), async (req, res) => {
         return res.status(400).json({ error: 'Код не предоставлен' });
     }
     
-    // Ограничиваем длину для API
     if (codeContent.length > 50000) {
         codeContent = codeContent.substring(0, 50000) + '\n... (код обрезан)';
     }
@@ -356,19 +327,26 @@ app.post('/api/analyze-code', upload.single('file'), async (req, res) => {
 ${codeContent}
 \`\`\`
 
-Предоставь анализ по следующим пунктам:
-1. Общая оценка качества кода
-2. Потенциальные проблемы и баги
-3. Рекомендации по улучшению
-4. Пример исправленного фрагмента (если нужно)
+Предоставь анализ по пунктам:
+1. Общая оценка
+2. Проблемы и баги
+3. Рекомендации
+4. Пример исправления
 
-Отвечай на русском языке, структурированно.`;
-
+Отвечай на русском языке.`;
+    
+    // Если нет API ключа
+    if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY === 'your_api_key_here') {
+        return res.json({
+            analysis: `⚠️ **API ключ не настроен**\n\nКод получен, но для анализа требуется настроить DeepSeek API ключ в переменных окружения Render.\n\n**Полученный код:**\n\`\`\`${language}\n${codeContent.substring(0, 500)}\n\`\`\``
+        });
+    }
+    
     try {
-        const response = await axios.post(process.env.DEEPSEEK_API_URL, {
-            model: process.env.DEFAULT_MODEL,
+        const response = await axios.post('https://api.deepseek.com/v1/chat/completions', {
+            model: 'deepseek-chat',
             messages: [
-                { role: 'system', content: 'Ты эксперт по анализу кода. Отвечай структурированно и подробно на русском языке.' },
+                { role: 'system', content: 'Ты эксперт по анализу кода. Отвечай структурированно на русском языке.' },
                 { role: 'user', content: prompt }
             ],
             max_tokens: 8192,
@@ -381,29 +359,19 @@ ${codeContent}
             timeout: 90000
         });
         
-        res.json({
-            analysis: response.data.choices[0].message.content,
-            usage: response.data.usage
-        });
+        res.json({ analysis: response.data.choices[0].message.content });
         
     } catch (error) {
-        console.error('Code analysis error:', error.response?.data || error.message);
+        console.error('Code analysis error:', error.message);
         res.status(500).json({ error: 'Ошибка анализа кода' });
     }
 });
 
-// Голосовое распознавание (прокси)
-app.post('/api/voice/process', upload.single('voice'), async (req, res) => {
-    const text = req.body.text || '';
+// Голосовой процесс
+app.post('/api/voice/process', upload.single('voice'), (req, res) => {
+    console.log('🎤 Voice process request');
     
-    if (text) {
-        res.json({
-            success: true,
-            recognized_text: text,
-            answer: `Вы сказали: "${text}". Как я могу помочь?`
-        });
-        return;
-    }
+    const text = req.body.text || '';
     
     if (req.file) {
         try {
@@ -413,8 +381,8 @@ app.post('/api/voice/process', upload.single('voice'), async (req, res) => {
     
     res.json({
         success: true,
-        recognized_text: 'Голосовое сообщение получено',
-        answer: 'Голосовое сообщение получено. Функция полного распознавания в разработке.'
+        recognized_text: text || 'Голосовое сообщение получено',
+        answer: text ? `Вы сказали: "${text}". Как я могу помочь?` : 'Голосовое сообщение получено. Функция полного распознавания в разработке.'
     });
 });
 
@@ -429,36 +397,42 @@ app.delete('/api/chat/:sessionId', (req, res) => {
     }
 });
 
-// Обработка 404
-app.use((req, res) => {
-    res.status(404).sendFile(path.join(__dirname, 'public', 'index.html'));
+// ============================================
+// СТАТИКА (ДОЛЖНА БЫТЬ ПОСЛЕ API)
+// ============================================
+
+// Корневой маршрут
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Обработка ошибок
-app.use((err, req, res, next) => {
-    console.error('Server error:', err);
-    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+// Обработка 404 - возвращаем index.html для SPA
+app.get('*', (req, res) => {
+    // Если это API запрос - возвращаем 404
+    if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'API endpoint not found' });
+    }
+    // Иначе возвращаем index.html
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ============================================
-// ЗАПУСК СЕРВЕРА
+// ЗАПУСК
 // ============================================
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    ╔══════════════════════════════════════════════════════════════════╗
-    ║                                                                  ║
-    ║     🦅 СОКОЛОВ AI - СЕРВЕР ЗАПУЩЕН                               ║
-    ║                                                                  ║
-    ║     📡 Порт: ${PORT}                                                 ║
-    ║     🌐 Режим: ${process.env.NODE_ENV || 'development'}                                    ║
-    ║     🤖 Модель: ${process.env.DEFAULT_MODEL || 'deepseek-chat'}                               ║
-    ║     💾 Сессий: ${sessions.size}                                                  ║
-    ║                                                                  ║
-    ║     🚀 Готов к работе!                                           ║
-    ║     📍 http://localhost:${PORT}                                           ║
-    ║                                                                  ║
-    ╚══════════════════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════════════════════════╗
+    ║                                                          ║
+    ║     🦅 СОКОЛОВ AI - СЕРВЕР ЗАПУЩЕН                       ║
+    ║                                                          ║
+    ║     📡 Порт: ${PORT}                                          ║
+    ║     🌐 Режим: ${process.env.NODE_ENV || 'development'}                      ║
+    ║     🔑 API Key: ${process.env.DEEPSEEK_API_KEY ? '✅ установлен' : '❌ не установлен'}           ║
+    ║                                                          ║
+    ║     🚀 http://localhost:${PORT}                                 ║
+    ║                                                          ║
+    ╚══════════════════════════════════════════════════════════╝
     `);
 });
 
