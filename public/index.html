@@ -5,205 +5,202 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="theme-color" content="#ffffff" id="theme-color">
-    <meta name="description" content="Соколов AI — интеллектуальный помощник на базе DeepSeek">
+    <meta name="description" content="Соколов AI — интеллектуальный помощник на базе DeepSeek. Режим программиста DeepSeek-Coder.">
     
-    <title>Соколов AI | DeepSeek-powered</title>
+    <title>Соколов AI | DeepSeek + Coder</title>
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="styles.css">
-    
-    <style>
-        /* Дополнительные стили для точного соответствия DeepSeek */
-        :root {
-            --ds-bg: #ffffff;
-            --ds-bg-secondary: #f7f7f8;
-            --ds-border: #e5e5e5;
-            --ds-text: #2c2c2c;
-            --ds-text-secondary: #6e6e6e;
-            --ds-accent: #10a37f;
-            --ds-accent-hover: #0e8f6e;
-            --ds-user-bubble: #f7f7f8;
-            --ds-bot-bubble: #ffffff;
-            --ds-shadow: 0 1px 2px rgba(0,0,0,0.05);
-        }
-        
-        [data-theme="dark"] {
-            --ds-bg: #343541;
-            --ds-bg-secondary: #40414f;
-            --ds-border: #4e4f60;
-            --ds-text: #ececec;
-            --ds-text-secondary: #acacbe;
-            --ds-accent: #10a37f;
-            --ds-accent-hover: #1a7f64;
-            --ds-user-bubble: #40414f;
-            --ds-bot-bubble: #444654;
-            --ds-shadow: 0 1px 2px rgba(0,0,0,0.2);
-        }
-        
-        /* Анимация печати как у DeepSeek */
-        .typing-indicator-ds {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            padding: 12px 16px;
-            background: var(--ds-user-bubble);
-            border-radius: 24px;
-            width: fit-content;
-        }
-        
-        .typing-dot-ds {
-            width: 8px;
-            height: 8px;
-            background: var(--ds-text-secondary);
-            border-radius: 50%;
-            animation: typingDs 1.4s infinite;
-        }
-        
-        @keyframes typingDs {
-            0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
-            30% { transform: translateY(-6px); opacity: 1; }
-        }
-        
-        /* Эффект свечения как у DeepSeek */
-        .glow-effect {
-            transition: box-shadow 0.2s ease;
-        }
-        
-        .glow-effect:focus-within {
-            box-shadow: 0 0 0 2px var(--ds-accent), 0 0 0 4px rgba(16, 163, 127, 0.1);
-        }
-    </style>
 </head>
 <body>
     <div class="app">
-        <!-- Боковая панель как у DeepSeek -->
+        <!-- Боковая панель -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <button class="new-chat-btn-ds" id="newChatBtn">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                            <path d="M16 2L4 9v14l12 7 12-7V9L16 2z" stroke="url(#gradient)" stroke-width="1.5" fill="none"/>
+                            <path d="M16 9v14M11 12l10 8M21 12l-10 8" stroke="url(#gradient)" stroke-width="1.5" stroke-linecap="round"/>
+                            <defs>
+                                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#e67e22"/>
+                                    <stop offset="100%" stop-color="#f39c12"/>
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                    </div>
+                    <div class="logo-text">
+                        <span class="logo-name">Соколов AI</span>
+                        <span class="logo-badge" id="modelBadge">DeepSeek</span>
+                    </div>
+                </div>
+                <button class="new-chat-btn" id="newChatBtn">
                     <i class="fas fa-plus"></i>
                     <span>Новый чат</span>
                 </button>
             </div>
-            
+
             <div class="chats-history">
+                <div class="history-header">
+                    <i class="fas fa-clock"></i>
+                    <span>История</span>
+                </div>
                 <div class="chats-list" id="chatsList">
                     <!-- Чаты будут здесь -->
                 </div>
             </div>
-            
+
             <div class="sidebar-footer">
-                <div class="user-info-ds" id="userInfo">
-                    <div class="user-avatar-ds">
-                        <span>👤</span>
+                <div class="user-info" id="userInfo">
+                    <div class="user-avatar">
+                        <i class="fas fa-user"></i>
                     </div>
-                    <div class="user-details-ds">
-                        <div class="user-name-ds" id="userName">Гость</div>
+                    <div class="user-details">
+                        <div class="user-name">Гость</div>
+                        <div class="user-status">активен</div>
                     </div>
                 </div>
-                <div class="model-info-ds">
-                    <i class="fas fa-microchip"></i>
-                    <span>DeepSeek-V3.2</span>
-                    <button class="theme-toggle-ds" id="themeToggle" title="Переключить тему">
-                        <i class="fas fa-moon"></i>
-                    </button>
+                <div class="model-selector-panel">
+                    <div class="model-selector-label">
+                        <i class="fas fa-microchip"></i>
+                        <span>Модель AI</span>
+                    </div>
+                    <select id="modelSelect" class="model-select">
+                        <option value="deepseek-chat">🧠 Соколов AI (общий)</option>
+                        <option value="deepseek-coder-6.7b-instruct">💻 DeepSeek-Coder (программирование)</option>
+                    </select>
                 </div>
+                <div class="model-info" id="modelInfo">
+                    <i class="fas fa-info-circle"></i>
+                    <span id="modelDescription">Универсальный помощник</span>
+                </div>
+                <button class="theme-toggle" id="themeToggle" title="Переключить тему">
+                    <i class="fas fa-moon"></i>
+                </button>
             </div>
         </aside>
-        
-        <!-- Основная область как у DeepSeek -->
+
+        <!-- Основная область -->
         <main class="main-area">
-            <div class="chat-header-ds">
-                <button class="menu-toggle-ds" id="menuToggle">
-                    <i class="fas fa-bars"></i>
-                </button>
-                <div class="header-title-ds">
-                    <h1>Соколов AI</h1>
-                    <span class="model-badge">DeepSeek-V3.2</span>
+            <div class="chat-header">
+                <div class="chat-header-left">
+                    <button class="menu-toggle" id="menuToggle">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <div class="header-title">
+                        <h1>Соколов AI</h1>
+                        <div class="status-badge" id="statusBadge">
+                            <span class="status-dot"></span>
+                            <span>Готов к работе</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="header-actions-ds">
-                    <button class="action-btn-ds" id="clearChatBtn" title="Очистить чат">
+                <div class="header-actions">
+                    <div class="model-indicator" id="modelIndicator">
+                        <span class="model-indicator-icon" id="modelIndicatorIcon">🧠</span>
+                        <span class="model-indicator-text" id="modelIndicatorText">Общий режим</span>
+                    </div>
+                    <button class="action-btn" id="clearChatBtn" title="Очистить чат">
                         <i class="fas fa-trash-alt"></i>
                     </button>
                 </div>
             </div>
-            
-            <div class="messages-container-ds" id="messagesContainer">
-                <div class="welcome-screen-ds" id="welcomeScreen">
-                    <div class="welcome-icon-ds">
+
+            <div class="messages-container" id="messagesContainer">
+                <div class="welcome-screen" id="welcomeScreen">
+                    <div class="welcome-icon" id="welcomeIcon">
                         🧠
                     </div>
                     <h2>Соколов AI</h2>
-                    <p>Интеллектуальный помощник на базе DeepSeek-V3.2</p>
-                    <div class="suggestions-ds">
-                        <button class="suggestion-btn-ds" data-prompt="Проанализируй этот код: function sum(a,b){return a+b}">
+                    <p id="welcomeText">Интеллектуальный помощник на базе DeepSeek</p>
+                    <div class="model-switch-hint" id="modelSwitchHint">
+                        <i class="fas fa-exchange-alt"></i>
+                        <span>Выберите режим в боковой панели</span>
+                    </div>
+                    <div class="suggestions">
+                        <button class="suggestion-btn" data-prompt="Проанализируй этот код: function sum(a,b){return a+b}">
                             <i class="fas fa-code"></i> Анализ кода
                         </button>
-                        <button class="suggestion-btn-ds" data-prompt="Напиши функцию на JavaScript для сортировки массива">
+                        <button class="suggestion-btn" data-prompt="Напиши функцию на JavaScript для сортировки массива объектов по дате">
                             <i class="fas fa-pen"></i> Написать функцию
                         </button>
-                        <button class="suggestion-btn-ds" data-prompt="Объясни концепцию замыканий в JavaScript">
+                        <button class="suggestion-btn" data-prompt="Объясни концепцию замыканий в JavaScript с примерами">
                             <i class="fas fa-graduation-cap"></i> Объяснить концепцию
                         </button>
-                        <button class="suggestion-btn-ds" data-prompt="Как оптимизировать производительность React?">
+                        <button class="suggestion-btn" data-prompt="Как оптимизировать производительность React приложения?">
                             <i class="fas fa-rocket"></i> Оптимизация React
                         </button>
                     </div>
                 </div>
-                <div class="messages-list-ds" id="messagesList"></div>
+                <div class="messages-list" id="messagesList"></div>
+                <div class="typing-indicator" id="typingIndicator" style="display: none;">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <span id="typingText">Соколов AI думает...</span>
+                </div>
             </div>
-            
-            <div class="input-area-ds">
-                <div class="input-tools-ds">
-                    <button class="tool-btn-ds" id="attachFileBtn" title="Прикрепить файл">
+
+            <div class="input-area">
+                <div class="input-tools">
+                    <button class="tool-btn" id="attachFileBtn" title="Прикрепить файл">
                         <i class="fas fa-paperclip"></i>
                     </button>
-                    <button class="tool-btn-ds" id="recordVoiceBtn" title="Голосовой ввод">
+                    <button class="tool-btn" id="recordVoiceBtn" title="Голосовой ввод">
                         <i class="fas fa-microphone"></i>
                     </button>
-                    <input type="file" id="fileInput" style="display: none" accept=".js,.py,.html,.css,.json,.txt,.md,.ts,.jsx,.tsx">
+                    <button class="tool-btn" id="clearInputBtn" title="Очистить">
+                        <i class="fas fa-eraser"></i>
+                    </button>
+                    <input type="file" id="fileInput" style="display: none" accept=".js,.py,.html,.css,.json,.txt,.md,.ts,.jsx,.tsx,.c,.cpp,.java,.go,.rs">
                 </div>
-                <div class="input-wrapper-ds glow-effect">
+                <div class="input-wrapper">
                     <textarea 
                         id="messageInput" 
-                        placeholder="Спросите что-нибудь..."
+                        placeholder="Спросите что-нибудь... или загрузите файл для анализа"
                         rows="1"
                     ></textarea>
-                    <button class="send-btn-ds" id="sendBtn">
-                        <i class="fas fa-arrow-up"></i>
+                    <button class="send-btn" id="sendBtn">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                    <button class="stop-btn" id="stopBtn" style="display: none;">
+                        <i class="fas fa-stop"></i>
                     </button>
                 </div>
-                <div class="input-info-ds">
+                <div class="input-info">
+                    <i class="fas fa-shield-alt"></i>
                     <span>Соколов AI может ошибаться. Проверяйте важную информацию.</span>
                 </div>
             </div>
         </main>
     </div>
-    
-    <!-- Модальное окно голоса -->
-    <div class="voice-modal-ds" id="voiceModal" style="display: none;">
-        <div class="voice-modal-content-ds">
-            <div class="voice-circle-ds">
+
+    <!-- Модальное окно для голосовой записи -->
+    <div class="voice-modal" id="voiceModal" style="display: none;">
+        <div class="voice-modal-content">
+            <div class="voice-circle">
                 <i class="fas fa-microphone"></i>
             </div>
-            <div class="voice-visualizer-ds">
+            <div class="voice-visualizer">
                 <span></span><span></span><span></span><span></span><span></span>
                 <span></span><span></span><span></span><span></span><span></span>
             </div>
-            <div class="voice-timer-ds" id="voiceTimer">0:00</div>
-            <div class="voice-actions-ds">
-                <button class="voice-cancel-btn-ds" id="voiceCancelBtn">
+            <div class="voice-timer" id="voiceTimer">0:00</div>
+            <div class="voice-actions">
+                <button class="voice-cancel-btn" id="voiceCancelBtn">
                     <i class="fas fa-times"></i> Отмена
                 </button>
-                <button class="voice-stop-btn-ds" id="voiceStopBtn">
+                <button class="voice-stop-btn" id="voiceStopBtn">
                     <i class="fas fa-stop"></i> Завершить
                 </button>
             </div>
         </div>
     </div>
-    
+
     <script src="config.js"></script>
     <script src="voice.js"></script>
     <script src="app.js"></script>
