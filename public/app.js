@@ -1,6 +1,6 @@
 // ============================================
 // СОКОЛОВ AI - ПОЛНЫЙ КЛИЕНТСКИЙ КОД
-// Как DeepSeek: стриминг, кнопка Stop, копирование кода, темы
+// Стриминг + fallback на обычный чат
 // ============================================
 
 (function() {
@@ -140,7 +140,7 @@
     }
     
     // ============================================
-    // УПРАВЛЕНИЕ КНОПКОЙ STOP (как у DeepSeek)
+    // УПРАВЛЕНИЕ КНОПКОЙ STOP
     // ============================================
     
     function showStopButton() {
@@ -223,11 +223,9 @@
         
         let formatted = content;
         
-        // Блоки кода с кнопкой копирования
         formatted = formatted.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
             const language = lang || 'plaintext';
             const escapedCode = escapeHtml(code.trim());
-            const codeId = 'code_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             
             return `
                 <div class="code-block-wrapper-ds code-block-wrapper">
@@ -243,26 +241,14 @@
             `;
         });
         
-        // Инлайн код
         formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
-        
-        // Жирный текст
         formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-        
-        // Ссылки
         formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-        
-        // Заголовки
         formatted = formatted.replace(/^### (.*$)/gm, '<h3>$1</h3>');
         formatted = formatted.replace(/^## (.*$)/gm, '<h2>$1</h2>');
         formatted = formatted.replace(/^# (.*$)/gm, '<h1>$1</h1>');
-        
-        // Списки
         formatted = formatted.replace(/^- (.*$)/gm, '<li>$1</li>');
         formatted = formatted.replace(/^\* (.*$)/gm, '<li>$1</li>');
-        formatted = formatted.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
-        
-        // Переносы строк
         formatted = formatted.replace(/\n/g, '<br>');
         
         return formatted;
@@ -506,8 +492,49 @@
     }
     
     // ============================================
-    // ОТПРАВКА СООБЩЕНИЙ (СТРИМИНГ КАК У DEEPSEEK)
+    // ОТПРАВКА СООБЩЕНИЙ (СТРИМИНГ + FALLBACK)
     // ============================================
+    
+    async function sendMessageRegular(message) {
+        const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
+        
+        try {
+            console.log('📡 Отправка обычного запроса...');
+            
+            const response = await fetch(`/api/chat/${currentSessionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    model: selectedModel,
+                    temperature: 1.0
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const data = await response.json();
+            
+            if (data.message) {
+                addMessage('bot', data.message.content);
+                const chat = chats.find(c => c.id === currentSessionId);
+                if (chat) {
+                    chat.messages.push(data.message);
+                    saveChats();
+                }
+            } else if (data.error) {
+                addMessage('bot', `⚠️ Ошибка: ${data.error}`);
+            } else {
+                addMessage('bot', '⚠️ Не удалось получить ответ.');
+            }
+            
+        } catch (error) {
+            console.error('Regular chat error:', error);
+            addMessage('bot', '⚠️ Ошибка соединения. Попробуйте позже.');
+        }
+    }
     
     async function sendMessageWithStream(message) {
         const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
@@ -530,6 +557,8 @@
         }, 300000);
         
         try {
+            console.log('📡 Отправка стриминг-запроса...');
+            
             const response = await fetch(`/api/chat/${currentSessionId}/stream`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -541,8 +570,12 @@
                 signal: currentAbortController.signal
             });
             
+            console.log('📡 Статус ответа:', response.status);
+            
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+                console.warn('⚠️ Стриминг вернул ошибку', response.status, ', пробуем обычный чат');
+                await sendMessageRegular(message);
+                return;
             }
             
             const reader = response.body.getReader();
@@ -550,15 +583,16 @@
             
             let botMessageElement = null;
             let fullResponse = '';
-            let messageContainer = null;
+            let hasReceivedData = false;
             
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 
                 const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
+                hasReceivedData = true;
                 
+                const lines = chunk.split('\n');
                 for (const line of lines) {
                     if (line.startsWith('data: ')) {
                         const data = line.slice(6);
@@ -606,7 +640,9 @@
                                 currentStreamingMessage = null;
                             }
                             
-                        } catch (e) {}
+                        } catch (e) {
+                            console.warn('Ошибка парсинга JSON:', e);
+                        }
                     }
                     
                     if (line.startsWith('event: done')) {
@@ -624,10 +660,16 @@
                 }
             }
             
+            if (!hasReceivedData && !fullResponse) {
+                console.warn('⚠️ Нет данных от стриминга, пробуем обычный чат');
+                await sendMessageRegular(message);
+            }
+            
         } catch (error) {
             console.error('Stream error:', error);
             if (error.name !== 'AbortError') {
-                addMessage('bot', '⚠️ Ошибка соединения. Попробуйте еще раз.');
+                console.log('🔄 Fallback на обычный чат');
+                await sendMessageRegular(message);
             }
         } finally {
             clearTimeout(timeoutId);
@@ -752,29 +794,12 @@
             if (this.themeToggle) {
                 this.themeToggle.addEventListener('click', () => this.toggleTheme());
             }
-            
-            // Слушаем системные изменения
-            if (window.matchMedia) {
-                window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-                    if (!localStorage.getItem('sokolov_theme')) {
-                        const newTheme = e.matches ? 'dark' : 'light';
-                        this.applyTheme(newTheme);
-                        this.updateIcon(newTheme);
-                    }
-                });
-            }
         }
         
         applyTheme(theme) {
             document.documentElement.setAttribute('data-theme', theme);
             localStorage.setItem('sokolov_theme', theme);
             this.currentTheme = theme;
-            
-            // Обновляем theme-color meta
-            const metaThemeColor = document.getElementById('theme-color');
-            if (metaThemeColor) {
-                metaThemeColor.setAttribute('content', theme === 'dark' ? '#343541' : '#ffffff');
-            }
         }
         
         toggleTheme() {
