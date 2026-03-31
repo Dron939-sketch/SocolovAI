@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+    <meta name="description" content="Соколов AI — интеллектуальный помощник на базе DeepSeek. Анализ кода, ответы на вопросы, помощь в разработке.">
+    
+    <title>Соколов AI | Интеллектуальный помощник</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Боковая панель -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                            <path d="M16 2L4 9v14l12 7 12-7V9L16 2z" stroke="url(#gradient)" stroke-width="1.5" fill="none"/>
+                            <path d="M16 9v14M11 12l10 8M21 12l-10 8" stroke="url(#gradient)" stroke-width="1.5" stroke-linecap="round"/>
+                            <defs>
+                                <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#e67e22"/>
+                                    <stop offset="100%" stop-color="#f39c12"/>
+                                </linearGradient>
+                            </defs>
+                        </svg>
+                    </div>
+                    <div class="logo-text">
+                        <span class="logo-name">Соколов AI</span>
+                        <span class="logo-badge">DeepSeek</span>
+                    </div>
+                </div>
+                <button class="new-chat-btn" id="newChatBtn">
+                    <i class="fas fa-plus"></i>
+                    <span>Новый чат</span>
+                </button>
+            </div>
+
+            <div class="chats-history">
+                <div class="history-header">
+                    <i class="fas fa-clock"></i>
+                    <span>История</span>
+                </div>
+                <div class="chats-list" id="chatsList">
+                    <!-- Чаты будут здесь -->
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <div class="user-info" id="userInfo">
+                    <div class="user-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <div class="user-details">
+                        <div class="user-name">Гость</div>
+                        <div class="user-status">активен</div>
+                    </div>
+                </div>
+                <div class="model-info">
+                    <i class="fas fa-microchip"></i>
+                    <span>DeepSeek-V3.2</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Основная область -->
+        <main class="main-area">
+            <div class="chat-header">
+                <button class="menu-toggle" id="menuToggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="header-title">
+                    <h1>Соколов AI</h1>
+                    <span class="status-badge" id="statusBadge">
+                        <span class="status-dot"></span>
+                        Готов к работе
+                    </span>
+                </div>
+                <div class="header-actions">
+                    <button class="action-btn" id="clearChatBtn" title="Очистить чат">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                    <div class="model-selector">
+                        <select id="modelSelect">
+                            <option value="deepseek-chat">DeepSeek-V3.2 (Универсальный)</option>
+                            <option value="deepseek-coder">DeepSeek-Coder (Программирование)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="messages-container" id="messagesContainer">
+                <div class="welcome-screen" id="welcomeScreen">
+                    <div class="welcome-icon">
+                        🦅
+                    </div>
+                    <h2>Добро пожаловать в Соколов AI</h2>
+                    <p>Интеллектуальный помощник на базе DeepSeek-V3.2</p>
+                    <div class="features-grid">
+                        <div class="feature-card">
+                            <i class="fas fa-code"></i>
+                            <h3>Анализ кода</h3>
+                            <p>Найди ошибки и улучши свой код</p>
+                        </div>
+                        <div class="feature-card">
+                            <i class="fas fa-brain"></i>
+                            <h3>Ответы на вопросы</h3>
+                            <p>Получи развернутые ответы</p>
+                        </div>
+                        <div class="feature-card">
+                            <i class="fas fa-file-alt"></i>
+                            <h3>Работа с файлами</h3>
+                            <p>Загружай и анализируй документы</p>
+                        </div>
+                        <div class="feature-card">
+                            <i class="fas fa-microphone"></i>
+                            <h3>Голосовой ввод</h3>
+                            <p>Диктуй вместо набора</p>
+                        </div>
+                    </div>
+                    <div class="suggestions">
+                        <button class="suggestion-btn" data-prompt="Проанализируй этот код: function sum(a,b){return a+b}">
+                            <i class="fas fa-code"></i> Проанализируй код
+                        </button>
+                        <button class="suggestion-btn" data-prompt="Напиши функцию на JavaScript для сортировки массива объектов по дате">
+                            <i class="fas fa-pen"></i> Напиши функцию
+                        </button>
+                        <button class="suggestion-btn" data-prompt="Объясни концепцию замыканий в JavaScript с примерами">
+                            <i class="fas fa-graduation-cap"></i> Объясни концепцию
+                        </button>
+                        <button class="suggestion-btn" data-prompt="Как оптимизировать производительность React приложения?">
+                            <i class="fas fa-rocket"></i> Оптимизация React
+                        </button>
+                    </div>
+                </div>
+                <div class="messages-list" id="messagesList"></div>
+                <div class="typing-indicator" id="typingIndicator" style="display: none;">
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <span>Соколов AI думает...</span>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <div class="input-tools">
+                    <button class="tool-btn" id="attachFileBtn" title="Прикрепить файл">
+                        <i class="fas fa-paperclip"></i>
+                    </button>
+                    <button class="tool-btn" id="recordVoiceBtn" title="Голосовой ввод">
+                        <i class="fas fa-microphone"></i>
+                    </button>
+                    <button class="tool-btn" id="clearInputBtn" title="Очистить">
+                        <i class="fas fa-eraser"></i>
+                    </button>
+                    <input type="file" id="fileInput" style="display: none" accept=".js,.py,.html,.css,.json,.txt,.md">
+                </div>
+                <div class="input-wrapper">
+                    <textarea 
+                        id="messageInput" 
+                        placeholder="Спросите что-нибудь... или загрузите файл для анализа"
+                        rows="1"
+                    ></textarea>
+                    <button class="send-btn" id="sendBtn">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>
+                <div class="input-info">
+                    <i class="fas fa-shield-alt"></i>
+                    <span>Соколов AI может ошибаться. Проверяйте важную информацию.</span>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Модальное окно для голосовой записи -->
+    <div class="voice-modal" id="voiceModal" style="display: none;">
+        <div class="voice-modal-content">
+            <div class="voice-visualizer">
+                <div class="voice-circle">
+                    <i class="fas fa-microphone"></i>
+                </div>
+                <div class="voice-waves">
+                    <span></span><span></span><span></span><span></span><span></span>
+                </div>
+                <div class="voice-timer" id="voiceTimer">0:00</div>
+            </div>
+            <div class="voice-actions">
+                <button class="voice-cancel-btn" id="voiceCancelBtn">
+                    <i class="fas fa-times"></i> Отмена
+                </button>
+                <button class="voice-stop-btn" id="voiceStopBtn">
+                    <i class="fas fa-stop"></i> Завершить
+                </button>
+            </div>
+            <div class="voice-hint">Говорите... мы вас слушаем</div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="config.js"></script>
+    <script src="voice.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
