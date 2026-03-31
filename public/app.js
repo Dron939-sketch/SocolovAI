@@ -1,6 +1,6 @@
 // ============================================
 // СОКОЛОВ AI - ПОЛНЫЙ КЛИЕНТСКИЙ КОД
-// Голосовой ввод, копирование кода, чаты
+// Исправлен: QUIC ошибки, улучшенный streaming, обработка ошибок
 // ============================================
 
 (function() {
@@ -145,24 +145,19 @@
         
         let formatted = content;
         
-        // Обрабатываем блоки кода с кнопками копирования
+        // Блоки кода
         formatted = formatted.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
             const language = lang || 'plaintext';
             const escapedCode = escapeHtml(code.trim());
-            const codeId = 'code_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             
             return `
-                <div class="code-block-wrapper" data-code-id="${codeId}">
+                <div class="code-block-wrapper">
                     <div class="code-header">
                         <span class="code-language">${escapeHtml(language)}</span>
                         <div class="code-actions">
                             <button class="copy-code-btn" data-code="${escapedCode.replace(/"/g, '&quot;')}" onclick="window.copyCodeBlock(this)">
                                 <i class="fas fa-copy"></i>
-                                <span>Копировать код</span>
-                            </button>
-                            <button class="select-code-btn" onclick="window.selectCodeBlock(this)">
-                                <i class="fas fa-mouse-pointer"></i>
-                                <span>Выделить</span>
+                                <span>Копировать</span>
                             </button>
                         </div>
                     </div>
@@ -171,32 +166,32 @@
             `;
         });
         
-        // Обрабатываем инлайн-код
+        // Инлайн код
         formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
         
-        // Обрабатываем жирный текст
+        // Жирный текст
         formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
         
-        // Обрабатываем ссылки
+        // Ссылки
         formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
         
-        // Обрабатываем заголовки
+        // Заголовки
         formatted = formatted.replace(/^### (.*$)/gm, '<h3>$1</h3>');
         formatted = formatted.replace(/^## (.*$)/gm, '<h2>$1</h2>');
         formatted = formatted.replace(/^# (.*$)/gm, '<h1>$1</h1>');
         
-        // Обрабатываем списки
+        // Списки
         formatted = formatted.replace(/^- (.*$)/gm, '<li>$1</li>');
         formatted = formatted.replace(/^\* (.*$)/gm, '<li>$1</li>');
         
-        // Обрабатываем переносы строк
+        // Переносы строк
         formatted = formatted.replace(/\n/g, '<br>');
         
         return formatted;
     }
     
     // ============================================
-    // ФУНКЦИИ КОПИРОВАНИЯ КОДА
+    // КОПИРОВАНИЕ КОДА
     // ============================================
     
     window.copyCodeBlock = async function(button) {
@@ -208,7 +203,6 @@
         
         try {
             await navigator.clipboard.writeText(code);
-            
             const originalText = button.innerHTML;
             button.innerHTML = '<i class="fas fa-check"></i><span>Скопировано!</span>';
             button.classList.add('copied');
@@ -218,7 +212,7 @@
                 button.classList.remove('copied');
             }, 2000);
             
-            showToast('Код скопирован в буфер обмена', 'success');
+            showToast('Код скопирован', 'success');
         } catch (err) {
             const textarea = document.createElement('textarea');
             textarea.value = code;
@@ -229,71 +223,6 @@
             showToast('Код скопирован', 'success');
         }
     };
-    
-    window.selectCodeBlock = function(button) {
-        const wrapper = button.closest('.code-block-wrapper');
-        if (!wrapper) return;
-        
-        const codeElement = wrapper.querySelector('code');
-        if (!codeElement) return;
-        
-        const range = document.createRange();
-        range.selectNodeContents(codeElement);
-        
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
-        
-        showToast('Код выделен. Нажмите Ctrl+C или Cmd+C для копирования', 'info');
-    };
-    
-    window.copySelectedText = function() {
-        const selection = window.getSelection();
-        const selectedText = selection.toString();
-        
-        if (selectedText) {
-            navigator.clipboard.writeText(selectedText).then(() => {
-                showToast('Выделенный текст скопирован', 'success');
-            }).catch(() => {
-                showToast('Не удалось скопировать', 'error');
-            });
-        }
-    };
-    
-    window.copySelectedTextAsCode = function() {
-        const selection = window.getSelection();
-        const text = selection.toString();
-        
-        if (text) {
-            const formattedCode = '```\n' + text + '\n```';
-            navigator.clipboard.writeText(formattedCode).then(() => {
-                showToast('Скопировано как блок кода', 'success');
-            });
-        }
-    };
-    
-    function addCopyButtonToMessages() {
-        const messages = document.querySelectorAll('.message-bubble');
-        messages.forEach(bubble => {
-            if (!bubble.querySelector('.message-copy-btn')) {
-                const copyBtn = document.createElement('button');
-                copyBtn.className = 'message-copy-btn';
-                copyBtn.innerHTML = '<i class="fas fa-copy"></i><span>Копировать</span>';
-                copyBtn.onclick = () => {
-                    const text = bubble.innerText;
-                    navigator.clipboard.writeText(text).then(() => {
-                        showToast('Сообщение скопировано', 'success');
-                        copyBtn.innerHTML = '<i class="fas fa-check"></i><span>Скопировано!</span>';
-                        setTimeout(() => {
-                            copyBtn.innerHTML = '<i class="fas fa-copy"></i><span>Копировать</span>';
-                        }, 2000);
-                    });
-                };
-                bubble.style.position = 'relative';
-                bubble.appendChild(copyBtn);
-            }
-        });
-    }
     
     // ============================================
     // УПРАВЛЕНИЕ ЧАТАМИ
@@ -410,7 +339,6 @@
         if (messagesList) {
             messagesList.insertAdjacentHTML('beforeend', messageHtml);
             scrollToBottom();
-            setTimeout(addCopyButtonToMessages, 100);
         }
         
         if (save && role === 'user') {
@@ -459,6 +387,7 @@
         } catch (error) {
             console.error('Ошибка создания сессии:', error);
             updateStatus('error', 'Ошибка подключения');
+            showToast('Не удалось создать сессию. Проверьте подключение к серверу.', 'error');
             return null;
         }
     }
@@ -498,6 +427,10 @@
         }
     }
     
+    // ============================================
+    // ПОТОКОВАЯ ПЕРЕДАЧА - ИСПРАВЛЕННАЯ
+    // ============================================
+    
     async function sendMessageWithStream(message) {
         const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
         
@@ -506,6 +439,17 @@
         }
         
         currentStreamController = new AbortController();
+        
+        // Таймаут 2 минуты
+        const timeoutId = setTimeout(() => {
+            if (currentStreamController) {
+                currentStreamController.abort();
+                hideTypingIndicator();
+                addMessage('bot', '⏰ Превышено время ожидания ответа. Попробуйте еще раз или отправьте более короткое сообщение.');
+                isTyping = false;
+                updateStatus('ready', 'Готов к работе');
+            }
+        }, 120000);
         
         try {
             const response = await fetch(`/api/chat/${currentSessionId}/stream`, {
@@ -519,17 +463,27 @@
                 signal: currentStreamController.signal
             });
             
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             
             let botMessageElement = null;
             let fullResponse = '';
-            let messageContainer = null;
+            let lastChunkTime = Date.now();
+            let heartbeatInterval = setInterval(() => {
+                if (Date.now() - lastChunkTime > 30000 && fullResponse) {
+                    console.log('Heartbeat: still waiting for response...');
+                }
+            }, 10000);
             
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 
+                lastChunkTime = Date.now();
                 const chunk = decoder.decode(value);
                 const lines = chunk.split('\n');
                 
@@ -576,13 +530,15 @@
                                     });
                                     saveChats();
                                 }
-                                setTimeout(addCopyButtonToMessages, 100);
                             }
                             
-                        } catch (e) {}
+                        } catch (e) {
+                            // Пропускаем некорректные данные
+                        }
                     }
                     
                     if (line.startsWith('event: done')) {
+                        clearInterval(heartbeatInterval);
                         break;
                     }
                     
@@ -591,17 +547,21 @@
                             const errorData = JSON.parse(line.slice(12));
                             throw new Error(errorData.error);
                         } catch (e) {
-                            throw new Error('Ошибка потока');
+                            throw new Error('Ошибка потока данных');
                         }
                     }
                 }
             }
             
+            clearInterval(heartbeatInterval);
+            
         } catch (error) {
+            console.error('Stream error:', error);
             if (error.name !== 'AbortError') {
-                throw error;
+                addMessage('bot', '⚠️ Ошибка соединения. Попробуйте еще раз или отправьте более короткое сообщение.');
             }
         } finally {
+            clearTimeout(timeoutId);
             currentStreamController = null;
         }
     }
@@ -627,7 +587,7 @@
             await sendMessageWithStream(message);
         } catch (error) {
             console.error('Ошибка отправки:', error);
-            addMessage('bot', 'Извините, произошла ошибка. Пожалуйста, попробуйте позже.');
+            addMessage('bot', '⚠️ Извините, произошла ошибка. Пожалуйста, попробуйте позже.');
             updateStatus('error', 'Ошибка');
         } finally {
             hideTypingIndicator();
@@ -635,6 +595,10 @@
             updateStatus('ready', 'Готов к работе');
         }
     }
+    
+    // ============================================
+    // АНАЛИЗ ФАЙЛОВ
+    // ============================================
     
     async function readFileContent(file) {
         return new Promise((resolve) => {
@@ -666,10 +630,20 @@
         updateStatus('thinking', 'Анализирую код...');
         
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 120000);
+            
             const response = await fetch('/api/analyze-code', {
                 method: 'POST',
-                body: formData
+                body: formData,
+                signal: controller.signal
             });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
             
             const data = await response.json();
             
@@ -678,7 +652,8 @@
             
         } catch (error) {
             console.error('Ошибка анализа:', error);
-            addMessage('bot', 'Извините, не удалось проанализировать файл.');
+            hideTypingIndicator();
+            addMessage('bot', '⚠️ Не удалось проанализировать файл. Попробуйте еще раз.');
         } finally {
             isTyping = false;
             updateStatus('ready', 'Готов к работе');
@@ -686,179 +661,43 @@
     }
     
     // ============================================
-    // ГОЛОСОВОЙ МОДУЛЬ
+    // ТЕМА ОФОРМЛЕНИЯ
     // ============================================
     
-    let voiceModal = null;
-    let voiceTimer = null;
-    let voiceStartTime = null;
-    
-    function initVoice() {
-        if (typeof window.VoiceManager !== 'undefined') {
-            voiceManager = new window.VoiceManager();
-            
-            voiceManager.onTranscript = (text) => {
-                if (messageInput) {
-                    messageInput.value = text;
-                    adjustTextareaHeight();
-                    setTimeout(() => {
-                        if (messageInput.value.trim()) {
-                            sendMessage();
-                        }
-                    }, 500);
-                }
-            };
-            
-            voiceManager.onResponse = (answer) => {
-                addMessage('bot', answer);
-            };
-            
-            voiceManager.onError = (error) => {
-                showToast(error, 'error');
-            };
-            
-            voiceManager.onRecordingStart = () => {
-                showVoiceModal();
-                updateVoiceButton(true);
-            };
-            
-            voiceManager.onRecordingStop = () => {
-                hideVoiceModal();
-                updateVoiceButton(false);
-            };
-            
-            voiceManager.onVolumeChange = (volume) => {
-                updateVoiceVisualizer(volume);
-            };
-            
-            console.log('🎤 Голосовой модуль готов');
+    class ThemeManager {
+        constructor() {
+            this.currentTheme = localStorage.getItem('sokolov_theme') || 'dark';
+            this.themeToggle = document.getElementById('themeToggle');
+            this.init();
         }
-    }
-    
-    function updateVoiceButton(isRecording) {
-        const voiceBtn = document.getElementById('recordVoiceBtn');
-        if (!voiceBtn) return;
         
-        if (isRecording) {
-            voiceBtn.classList.add('recording');
-            voiceBtn.innerHTML = '<i class="fas fa-stop"></i>';
-            voiceBtn.title = 'Остановить запись';
-        } else {
-            voiceBtn.classList.remove('recording');
-            voiceBtn.innerHTML = '<i class="fas fa-microphone"></i>';
-            voiceBtn.title = 'Голосовой ввод';
-        }
-    }
-    
-    function showVoiceModal() {
-        if (voiceModal) {
-            voiceModal.style.display = 'flex';
-            voiceStartTime = Date.now();
-            startVoiceTimer();
-        }
-    }
-    
-    function hideVoiceModal() {
-        if (voiceModal) {
-            voiceModal.style.display = 'none';
-        }
-        if (voiceTimer) {
-            clearInterval(voiceTimer);
-            voiceTimer = null;
-        }
-    }
-    
-    function startVoiceTimer() {
-        const timerEl = document.getElementById('voiceTimer');
-        if (!timerEl) return;
-        
-        voiceTimer = setInterval(() => {
-            if (voiceStartTime) {
-                const elapsed = Math.floor((Date.now() - voiceStartTime) / 1000);
-                const minutes = Math.floor(elapsed / 60);
-                const seconds = elapsed % 60;
-                timerEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        init() {
+            this.applyTheme(this.currentTheme);
+            this.updateIcon(this.currentTheme);
+            
+            if (this.themeToggle) {
+                this.themeToggle.addEventListener('click', () => this.toggleTheme());
             }
-        }, 100);
-    }
-    
-    function updateVoiceVisualizer(volume) {
-        const bars = document.querySelectorAll('.voice-visualizer span');
-        const intensity = Math.min(1, volume / 100);
+        }
         
-        bars.forEach((bar, i) => {
-            const height = 20 + (intensity * 60) * (1 - i * 0.05);
-            bar.style.height = `${Math.max(20, height)}px`;
-        });
-    }
-    
-    function createVoiceModal() {
-        const modal = document.createElement('div');
-        modal.id = 'voiceModal';
-        modal.className = 'voice-modal';
-        modal.style.display = 'none';
-        modal.innerHTML = `
-            <div class="voice-modal-content">
-                <div class="voice-circle">
-                    <i class="fas fa-microphone"></i>
-                </div>
-                <div class="voice-visualizer">
-                    <span></span><span></span><span></span><span></span><span></span>
-                    <span></span><span></span><span></span><span></span><span></span>
-                </div>
-                <div class="voice-timer" id="voiceTimer">0:00</div>
-                <div class="voice-actions">
-                    <button class="voice-cancel-btn" id="voiceCancelBtn">
-                        <i class="fas fa-times"></i> Отмена
-                    </button>
-                    <button class="voice-stop-btn" id="voiceStopBtn">
-                        <i class="fas fa-stop"></i> Завершить
-                    </button>
-                </div>
-                <div class="voice-hint">
-                    <i class="fas fa-microphone-alt"></i> Говорите... мы вас слушаем
-                </div>
-            </div>
-        `;
+        applyTheme(theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+            localStorage.setItem('sokolov_theme', theme);
+            this.currentTheme = theme;
+        }
         
-        document.body.appendChild(modal);
-        voiceModal = modal;
+        toggleTheme() {
+            const newTheme = this.currentTheme === 'dark' ? 'light' : 'dark';
+            this.applyTheme(newTheme);
+            this.updateIcon(newTheme);
+            showToast(`Тема: ${newTheme === 'dark' ? 'тёмная' : 'светлая'}`, 'info');
+        }
         
-        document.getElementById('voiceCancelBtn')?.addEventListener('click', () => {
-            if (voiceManager) voiceManager.stopRecording();
-            hideVoiceModal();
-        });
-        
-        document.getElementById('voiceStopBtn')?.addEventListener('click', () => {
-            if (voiceManager) voiceManager.stopRecording();
-        });
-    }
-    
-    function addVoiceButton() {
-        const inputTools = document.querySelector('.input-tools');
-        if (inputTools && !document.getElementById('recordVoiceBtn')) {
-            const voiceBtn = document.createElement('button');
-            voiceBtn.id = 'recordVoiceBtn';
-            voiceBtn.className = 'tool-btn voice-btn';
-            voiceBtn.innerHTML = '<i class="fas fa-microphone"></i>';
-            voiceBtn.title = 'Голосовой ввод';
-            voiceBtn.onclick = () => {
-                if (voiceManager) {
-                    if (voiceManager.isRecordingActive()) {
-                        voiceManager.stopRecording();
-                    } else {
-                        voiceManager.startRecording();
-                    }
-                } else {
-                    showToast('Голосовой модуль загружается...', 'info');
-                }
-            };
-            
-            const clearBtn = document.getElementById('clearInputBtn');
-            if (clearBtn) {
-                inputTools.insertBefore(voiceBtn, clearBtn);
-            } else {
-                inputTools.appendChild(voiceBtn);
+        updateIcon(theme) {
+            if (!this.themeToggle) return;
+            const icon = this.themeToggle.querySelector('i');
+            if (icon) {
+                icon.className = theme === 'dark' ? 'fas fa-moon' : 'fas fa-sun';
             }
         }
     }
@@ -881,11 +720,7 @@
         
         setupEventListeners();
         
-        setTimeout(() => {
-            initVoice();
-            createVoiceModal();
-            addVoiceButton();
-        }, 1000);
+        window.themeManager = new ThemeManager();
         
         updateStatus('ready', 'Готов к работе');
         console.log('✅ Соколов AI готов');
@@ -964,14 +799,7 @@
         });
     }
     
-    const messageObserver = new MutationObserver(() => {
-        addCopyButtonToMessages();
-    });
-    
-    if (messagesList) {
-        messageObserver.observe(messagesList, { childList: true, subtree: true });
-    }
-    
+    // Запуск
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {
