@@ -1015,5 +1015,477 @@
     } else {
         init();
     }
+    // ============================================
+// ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ (как у DeepSeek)
+// ============================================
+
+// ============================================
+// 1. КОПИРОВАНИЕ СООБЩЕНИЯ
+// ============================================
+
+function copyMessage(messageId) {
+    const messageElement = document.getElementById(`msg-${messageId}`);
+    if (messageElement) {
+        const text = messageElement.innerText;
+        navigator.clipboard.writeText(text).then(() => {
+            showToast('Сообщение скопировано', 'success');
+            
+            // Визуальная обратная связь
+            const copyBtn = document.querySelector(`[data-copy="${messageId}"]`);
+            if (copyBtn) {
+                const originalHTML = copyBtn.innerHTML;
+                copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                setTimeout(() => {
+                    copyBtn.innerHTML = originalHTML;
+                }, 2000);
+            }
+        });
+    }
+}
+
+// ============================================
+// 2. РЕДАКТИРОВАНИЕ СООБЩЕНИЯ
+// ============================================
+
+function editMessage(messageId, originalText) {
+    const messageElement = document.getElementById(`msg-${messageId}`);
+    if (!messageElement) return;
     
+    // Создаем текстовое поле для редактирования
+    const textarea = document.createElement('textarea');
+    textarea.value = originalText;
+    textarea.style.cssText = `
+        width: 100%;
+        padding: 12px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--accent-primary);
+        border-radius: 12px;
+        color: var(--text-primary);
+        font-family: inherit;
+        font-size: 14px;
+        resize: vertical;
+        min-height: 100px;
+    `;
+    
+    const buttonGroup = document.createElement('div');
+    buttonGroup.style.cssText = `
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+    `;
+    
+    const saveBtn = document.createElement('button');
+    saveBtn.innerHTML = '<i class="fas fa-check"></i> Сохранить';
+    saveBtn.style.cssText = `
+        padding: 6px 12px;
+        background: var(--accent-primary);
+        border: none;
+        border-radius: 8px;
+        color: white;
+        cursor: pointer;
+    `;
+    
+    const cancelBtn = document.createElement('button');
+    cancelBtn.innerHTML = '<i class="fas fa-times"></i> Отмена';
+    cancelBtn.style.cssText = `
+        padding: 6px 12px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        color: var(--text-secondary);
+        cursor: pointer;
+    `;
+    
+    buttonGroup.appendChild(saveBtn);
+    buttonGroup.appendChild(cancelBtn);
+    
+    const originalContent = messageElement.innerHTML;
+    messageElement.innerHTML = '';
+    messageElement.appendChild(textarea);
+    messageElement.appendChild(buttonGroup);
+    
+    textarea.focus();
+    
+    saveBtn.onclick = async () => {
+        const newText = textarea.value.trim();
+        if (!newText) return;
+        
+        // Обновляем сообщение в DOM
+        messageElement.innerHTML = formatMessageWithCode(newText);
+        
+        // Обновляем в локальном хранилище
+        const chat = chats.find(c => c.id === currentSessionId);
+        if (chat) {
+            const msgIndex = chat.messages.findIndex(m => m.id === messageId);
+            if (msgIndex !== -1) {
+                chat.messages[msgIndex].content = newText;
+                saveChats();
+            }
+        }
+        
+        showToast('Сообщение отредактировано', 'success');
+    };
+    
+    cancelBtn.onclick = () => {
+        messageElement.innerHTML = originalContent;
+    };
+}
+
+// ============================================
+// 3. ПЕРЕГЕНЕРАЦИЯ ОТВЕТА
+// ============================================
+
+async function regenerateResponse(messageId) {
+    const chat = chats.find(c => c.id === currentSessionId);
+    if (!chat) return;
+    
+    // Находим индекс сообщения
+    const msgIndex = chat.messages.findIndex(m => m.id === messageId);
+    if (msgIndex === -1) return;
+    
+    // Находим предыдущее сообщение пользователя
+    let userMessage = null;
+    for (let i = msgIndex - 1; i >= 0; i--) {
+        if (chat.messages[i].role === 'user') {
+            userMessage = chat.messages[i];
+            break;
+        }
+    }
+    
+    if (!userMessage) {
+        showToast('Не найдено сообщение для перегенерации', 'error');
+        return;
+    }
+    
+    // Удаляем текущий ответ и все последующие
+    chat.messages = chat.messages.slice(0, msgIndex);
+    saveChats();
+    
+    // Перерисовываем сообщения
+    clearMessages();
+    chat.messages.forEach(msg => {
+        addMessage(msg.role, msg.content, false);
+    });
+    
+    // Отправляем сообщение заново
+    showTypingIndicator();
+    isTyping = true;
+    showStopButton();
+    
+    try {
+        await sendMessageWithStream(userMessage.content);
+    } catch (error) {
+        console.error('Regenerate error:', error);
+        addMessage('bot', '⚠️ Не удалось перегенерировать ответ');
+    } finally {
+        hideTypingIndicator();
+        isTyping = false;
+        hideStopButton();
+    }
+}
+
+// ============================================
+// 4. УДАЛЕНИЕ СООБЩЕНИЯ
+// ============================================
+
+function deleteMessage(messageId) {
+    if (!confirm('Удалить это сообщение?')) return;
+    
+    const chat = chats.find(c => c.id === currentSessionId);
+    if (!chat) return;
+    
+    const msgIndex = chat.messages.findIndex(m => m.id === messageId);
+    if (msgIndex !== -1) {
+        chat.messages.splice(msgIndex, 1);
+        saveChats();
+        
+        // Перерисовываем сообщения
+        clearMessages();
+        chat.messages.forEach(msg => {
+            addMessage(msg.role, msg.content, false);
+        });
+        
+        showToast('Сообщение удалено', 'success');
+    }
+}
+
+// ============================================
+// 5. ЭКСПОРТ ДИАЛОГА
+// ============================================
+
+function exportChat() {
+    const chat = chats.find(c => c.id === currentSessionId);
+    if (!chat || chat.messages.length === 0) {
+        showToast('Нет сообщений для экспорта', 'error');
+        return;
+    }
+    
+    // Формируем текст экспорта
+    let exportText = `Соколов AI - Экспорт диалога\n`;
+    exportText += `Дата: ${new Date().toLocaleString()}\n`;
+    exportText += `${'='.repeat(50)}\n\n`;
+    
+    chat.messages.forEach(msg => {
+        const role = msg.role === 'user' ? '👤 Пользователь' : '🤖 Соколов AI';
+        exportText += `${role}:\n${msg.content}\n\n${'-'.repeat(30)}\n\n`;
+    });
+    
+    // Скачиваем файл
+    const blob = new Blob([exportText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sokolov_ai_chat_${new Date().toISOString().slice(0, 19)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    
+    showToast('Диалог экспортирован', 'success');
+}
+
+// ============================================
+// 6. ПОИСК ПО ЧАТУ
+// ============================================
+
+let searchModal = null;
+
+function showSearchModal() {
+    if (searchModal) {
+        searchModal.style.display = 'flex';
+        return;
+    }
+    
+    searchModal = document.createElement('div');
+    searchModal.className = 'search-modal';
+    searchModal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.8);
+        backdrop-filter: blur(10px);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+    `;
+    
+    searchModal.innerHTML = `
+        <div style="background: var(--bg-secondary); border-radius: 24px; padding: 24px; width: 90%; max-width: 500px;">
+            <h3 style="margin-bottom: 16px;">🔍 Поиск по чату</h3>
+            <input type="text" id="searchInput" placeholder="Введите текст для поиска..." style="
+                width: 100%;
+                padding: 12px;
+                background: var(--bg-tertiary);
+                border: 1px solid var(--border-color);
+                border-radius: 12px;
+                color: var(--text-primary);
+                margin-bottom: 16px;
+            ">
+            <div id="searchResults" style="max-height: 300px; overflow-y: auto;"></div>
+            <button id="closeSearchBtn" style="
+                margin-top: 16px;
+                padding: 10px;
+                width: 100%;
+                background: var(--accent-primary);
+                border: none;
+                border-radius: 12px;
+                color: white;
+                cursor: pointer;
+            ">Закрыть</button>
+        </div>
+    `;
+    
+    document.body.appendChild(searchModal);
+    
+    const searchInput = searchModal.querySelector('#searchInput');
+    const searchResults = searchModal.querySelector('#searchResults');
+    const closeBtn = searchModal.querySelector('#closeSearchBtn');
+    
+    searchInput.addEventListener('input', () => {
+        const query = searchInput.value.toLowerCase().trim();
+        if (!query) {
+            searchResults.innerHTML = '';
+            return;
+        }
+        
+        const chat = chats.find(c => c.id === currentSessionId);
+        if (!chat) return;
+        
+        const results = chat.messages.filter(msg => 
+            msg.content.toLowerCase().includes(query)
+        );
+        
+        if (results.length === 0) {
+            searchResults.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-secondary);">Ничего не найдено</div>';
+            return;
+        }
+        
+        searchResults.innerHTML = results.map(msg => `
+            <div style="
+                padding: 12px;
+                margin-bottom: 8px;
+                background: var(--bg-tertiary);
+                border-radius: 12px;
+                cursor: pointer;
+                border-left: 3px solid ${msg.role === 'user' ? 'var(--accent-primary)' : 'var(--success)'};
+            " onclick="jumpToMessage('${msg.id}')">
+                <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">
+                    ${msg.role === 'user' ? '👤 Пользователь' : '🤖 Соколов AI'}
+                </div>
+                <div style="font-size: 13px;">${escapeHtml(msg.content.substring(0, 100))}${msg.content.length > 100 ? '...' : ''}</div>
+            </div>
+        `).join('');
+    });
+    
+    closeBtn.onclick = () => {
+        searchModal.style.display = 'none';
+    };
+    
+    searchInput.focus();
+}
+
+function jumpToMessage(messageId) {
+    const messageElement = document.getElementById(`msg-${messageId}`);
+    if (messageElement) {
+        messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        messageElement.style.animation = 'highlight 1s ease';
+        setTimeout(() => {
+            messageElement.style.animation = '';
+        }, 1000);
+    }
+    if (searchModal) searchModal.style.display = 'none';
+}
+
+// ============================================
+// 7. ОБНОВЛЕНИЕ ФУНКЦИИ addMessage (добавляем кнопки)
+// ============================================
+
+// Сохраняем оригинальную функцию
+const originalAddMessage = addMessage;
+
+// Переопределяем addMessage с дополнительными кнопками
+window.addMessage = function(role, content, save = true) {
+    const messageId = Date.now().toString();
+    const formattedContent = role === 'bot' ? formatMessageWithCode(content) : escapeHtml(content).replace(/\n/g, '<br>');
+    
+    const messageHtml = `
+        <div class="message ${role === 'user' ? 'user' : 'bot'}" id="msg-${messageId}">
+            <div class="message-avatar">
+                ${role === 'user' ? '<i class="fas fa-user"></i>' : MODELS[currentModel]?.icon || '🤖'}
+            </div>
+            <div class="message-content">
+                <div class="message-bubble">
+                    ${formattedContent}
+                </div>
+                <div class="message-actions" style="display: flex; gap: 8px; margin-top: 8px; opacity: 0.7; transition: opacity 0.2s;">
+                    <button class="message-action-btn" onclick="copyMessage('${messageId}')" title="Копировать">
+                        <i class="fas fa-copy"></i>
+                    </button>
+                    ${role === 'user' ? `
+                        <button class="message-action-btn" onclick="editMessage('${messageId}', \`${escapeHtml(content).replace(/`/g, '\\`')}\`)" title="Редактировать">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                    ` : `
+                        <button class="message-action-btn" onclick="regenerateResponse('${messageId}')" title="Перегенерировать">
+                            <i class="fas fa-rotate-right"></i>
+                        </button>
+                    `}
+                    <button class="message-action-btn" onclick="deleteMessage('${messageId}')" title="Удалить">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    if (messagesList) {
+        messagesList.insertAdjacentHTML('beforeend', messageHtml);
+        scrollToBottom();
+    }
+    
+    // Сохраняем в локальный чат
+    if (save) {
+        const message = {
+            id: messageId,
+            role: role,
+            content: content,
+            timestamp: new Date().toISOString()
+        };
+        
+        const chat = chats.find(c => c.id === currentSessionId);
+        if (chat) {
+            chat.messages.push(message);
+            saveChats();
+        }
+        
+        // Если это сообщение пользователя и save=true, отправляем на сервер
+        if (role === 'user') {
+            // Отправка уже обрабатывается в sendMessage
+        }
+    }
+    
+    return { id: messageId };
+};
+
+// ============================================
+// 8. ДОБАВЛЯЕМ КНОПКИ В ИНТЕРФЕЙС
+// ============================================
+
+function addExtraButtons() {
+    const headerActions = document.querySelector('.header-actions');
+    if (headerActions && !document.getElementById('exportChatBtn')) {
+        const exportBtn = document.createElement('button');
+        exportBtn.id = 'exportChatBtn';
+        exportBtn.className = 'action-btn';
+        exportBtn.innerHTML = '<i class="fas fa-download"></i>';
+        exportBtn.title = 'Экспортировать диалог';
+        exportBtn.onclick = exportChat;
+        
+        const searchBtn = document.createElement('button');
+        searchBtn.id = 'searchChatBtn';
+        searchBtn.className = 'action-btn';
+        searchBtn.innerHTML = '<i class="fas fa-search"></i>';
+        searchBtn.title = 'Поиск по чату';
+        searchBtn.onclick = showSearchModal;
+        
+        headerActions.appendChild(exportBtn);
+        headerActions.appendChild(searchBtn);
+    }
+}
+
+// Добавляем стили для кнопок действий
+const actionStyles = document.createElement('style');
+actionStyles.textContent = `
+    .message-actions {
+        opacity: 0;
+        transition: opacity 0.2s ease;
+    }
+    .message:hover .message-actions {
+        opacity: 1;
+    }
+    .message-action-btn {
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-color);
+        border-radius: 6px;
+        padding: 4px 8px;
+        font-size: 12px;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: all 0.2s ease;
+    }
+    .message-action-btn:hover {
+        background: var(--accent-primary);
+        color: white;
+        border-color: var(--accent-primary);
+    }
+    @keyframes highlight {
+        0% { background-color: rgba(230, 126, 34, 0.3); }
+        100% { background-color: transparent; }
+    }
+`;
+document.head.appendChild(actionStyles);
+
+// Инициализация дополнительных кнопок
+setTimeout(addExtraButtons, 1000);
 })();
