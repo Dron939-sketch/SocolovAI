@@ -1,6 +1,6 @@
 // ============================================
 // СОКОЛОВ AI - ПОЛНЫЙ СЕРВЕР
-// Исправлен: полное отключение QUIC, улучшенный streaming
+// Увеличенные таймауты, поддержка больших сообщений
 // ============================================
 
 require('dotenv').config();
@@ -16,19 +16,17 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ============================================
-// ПРИНУДИТЕЛЬНОЕ ОТКЛЮЧЕНИЕ HTTP/2 и QUIC
+// УВЕЛИЧЕНИЕ ТАЙМАУТОВ
 // ============================================
 
-// Запрещаем keep-alive и HTTP/2
-app.disable('etag');
-app.set('trust proxy', true);
+// Увеличиваем лимиты для Express
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ extended: true, limit: '100mb' }));
 
-// Middleware для принудительного использования HTTP/1.1
+// Увеличиваем таймаут сервера
 app.use((req, res, next) => {
-    // Запрещаем upgrade до HTTP/2
-    res.setHeader('Connection', 'close');
-    res.setHeader('X-HTTP2-Stream-ID', '');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
+    req.setTimeout(300000); // 5 минут
+    res.setTimeout(300000);
     next();
 });
 
@@ -43,7 +41,7 @@ if (!fs.existsSync(uploadDir)) {
 
 const upload = multer({ 
     dest: uploadDir,
-    limits: { fileSize: 50 * 1024 * 1024 }
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB
 });
 
 // ============================================
@@ -68,10 +66,6 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Парсеры
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
 // Статические файлы
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -94,21 +88,6 @@ function getSession(sessionId) {
     session.lastActivity = new Date();
     return session;
 }
-
-// Очистка старых сессий
-setInterval(() => {
-    const now = Date.now();
-    const SESSION_TTL = 24 * 60 * 60 * 1000;
-    let deleted = 0;
-    for (const [id, session] of sessions) {
-        const lastActivity = new Date(session.lastActivity).getTime();
-        if (now - lastActivity > SESSION_TTL) {
-            sessions.delete(id);
-            deleted++;
-        }
-    }
-    if (deleted > 0) console.log(`🗑️ Очищено ${deleted} устаревших сессий`);
-}, 6 * 60 * 60 * 1000);
 
 // ============================================
 // API ENDPOINTS
@@ -146,173 +125,7 @@ app.get('/api/chat/:sessionId', (req, res) => {
 });
 
 // ============================================
-// ПОТОКОВАЯ ПЕРЕДАЧА (исправленная)
-// ============================================
-
-app.post('/api/chat/:sessionId/stream', async (req, res) => {
-    const { sessionId } = req.params;
-    const { message, model = 'deepseek-chat', temperature = 0.7 } = req.body;
-    
-    console.log(`📡 Stream запрос для ${sessionId}: ${message?.substring(0, 100)}...`);
-    
-    if (!message || message.trim() === '') {
-        return res.status(400).json({ error: 'Сообщение не может быть пустым' });
-    }
-    
-    const session = getSession(sessionId);
-    
-    const userMessage = {
-        id: uuidv4(),
-        role: 'user',
-        content: message,
-        timestamp: new Date().toISOString()
-    };
-    session.messages.push(userMessage);
-    
-    // Настройка SSE с принудительным отключением буферизации
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'close',                    // вместо keep-alive
-        'X-Accel-Buffering': 'no',
-        'Transfer-Encoding': 'chunked'
-    });
-    
-    // Проверка API ключа
-    if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY === 'your_api_key_here') {
-        console.log('⚠️ API ключ не настроен');
-        const mockResponse = `⚠️ **API ключ DeepSeek не настроен.**\n\nДобавьте переменную окружения DEEPSEEK_API_KEY в настройках Render.\n\n**Как получить ключ:**\n1. Зарегистрируйтесь на [platform.deepseek.com](https://platform.deepseek.com)\n2. Перейдите в раздел API Keys\n3. Создайте новый ключ\n4. Добавьте его в переменные окружения\n\nПосле настройки перезапустите сервер.`;
-        
-        for (let i = 0; i < mockResponse.length; i++) {
-            res.write(`data: ${JSON.stringify({ content: mockResponse[i], done: false })}\n\n`);
-            await new Promise(r => setTimeout(r, 5));
-        }
-        res.write(`event: done\ndata: ${JSON.stringify({ fullResponse: mockResponse })}\n\n`);
-        res.end();
-        return;
-    }
-    
-    const messages = [
-        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник. Отвечай на русском языке, будь дружелюбным и профессиональным.' },
-        ...session.messages.map(m => ({ role: m.role, content: m.content }))
-    ];
-    
-    // Создаем HTTP агент с полным отключением keep-alive
-    const http = require('http');
-    const https = require('https');
-    
-    const agent = new https.Agent({
-        keepAlive: false,
-        maxSockets: 1,
-        maxFreeSockets: 0,
-        timeout: 120000,
-        rejectUnauthorized: true
-    });
-    
-    try {
-        console.log(`📤 Отправка потокового запроса в DeepSeek...`);
-        
-        const response = await axios({
-            method: 'POST',
-            url: process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions',
-            data: {
-                model: model,
-                messages: messages,
-                max_tokens: 4096,
-                temperature: temperature,
-                stream: true
-            },
-            headers: {
-                'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-                'Content-Type': 'application/json',
-                'Accept': 'text/event-stream',
-                'Connection': 'close'
-            },
-            responseType: 'stream',
-            timeout: 120000,
-            httpAgent: agent,
-            httpsAgent: agent
-        });
-        
-        let fullResponse = '';
-        let chunkCount = 0;
-        let isEnded = false;
-        
-        response.data.on('data', (chunk) => {
-            if (isEnded) return;
-            
-            const lines = chunk.toString().split('\n');
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') {
-                        if (!isEnded) {
-                            isEnded = true;
-                            const aiMessage = {
-                                id: uuidv4(),
-                                role: 'assistant',
-                                content: fullResponse,
-                                timestamp: new Date().toISOString()
-                            };
-                            session.messages.push(aiMessage);
-                            res.write(`event: done\ndata: ${JSON.stringify({ fullResponse })}\n\n`);
-                            res.end();
-                        }
-                        return;
-                    }
-                    try {
-                        const parsed = JSON.parse(data);
-                        const content = parsed.choices[0]?.delta?.content || '';
-                        if (content) {
-                            fullResponse += content;
-                            chunkCount++;
-                            res.write(`data: ${JSON.stringify({ content, done: false })}\n\n`);
-                        }
-                    } catch (e) {
-                        // Пропускаем некорректные данные
-                    }
-                }
-            }
-        });
-        
-        response.data.on('error', (error) => {
-            console.error('❌ Ошибка потока:', error.message);
-            if (!isEnded && !res.writableEnded) {
-                isEnded = true;
-                res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
-                res.end();
-            }
-        });
-        
-        response.data.on('end', () => {
-            console.log(`✅ Поток завершен, отправлено ${chunkCount} чанков, длина ответа: ${fullResponse.length}`);
-            if (!isEnded && !res.writableEnded) {
-                isEnded = true;
-                if (fullResponse) {
-                    const aiMessage = {
-                        id: uuidv4(),
-                        role: 'assistant',
-                        content: fullResponse,
-                        timestamp: new Date().toISOString()
-                    };
-                    session.messages.push(aiMessage);
-                    res.write(`event: done\ndata: ${JSON.stringify({ fullResponse })}\n\n`);
-                }
-                res.end();
-            }
-        });
-        
-    } catch (error) {
-        console.error('❌ Ошибка потокового запроса:', error.message);
-        if (!res.writableEnded) {
-            res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
-            res.end();
-        }
-    }
-});
-
-// ============================================
-// ОБЫЧНЫЙ ЧАТ (без streaming) - фолбэк
+// ОСНОВНОЙ ЧАТ - УВЕЛИЧЕННЫЕ ТАЙМАУТЫ
 // ============================================
 
 app.post('/api/chat/:sessionId', async (req, res) => {
@@ -320,6 +133,7 @@ app.post('/api/chat/:sessionId', async (req, res) => {
     const { message, model = 'deepseek-chat', temperature = 0.7 } = req.body;
     
     console.log(`💬 Обычный запрос для ${sessionId}: ${message?.substring(0, 100)}...`);
+    console.log(`📏 Длина сообщения: ${message?.length || 0} символов`);
     
     if (!message || message.trim() === '') {
         return res.status(400).json({ error: 'Сообщение не может быть пустым' });
@@ -335,8 +149,11 @@ app.post('/api/chat/:sessionId', async (req, res) => {
     };
     session.messages.push(userMessage);
     
+    // Проверка API ключа
     if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY === 'your_api_key_here') {
-        const mockResponse = `⚠️ API ключ DeepSeek не настроен.\n\nДобавьте переменную окружения DEEPSEEK_API_KEY в настройках Render.\n\nПолучить ключ: https://platform.deepseek.com`;
+        console.log('⚠️ API ключ не настроен');
+        const mockResponse = `⚠️ **API ключ DeepSeek не настроен.**\n\nДобавьте переменную окружения DEEPSEEK_API_KEY в настройках Render.\n\n**Как получить ключ:**\n1. Зарегистрируйтесь на [platform.deepseek.com](https://platform.deepseek.com)\n2. Перейдите в раздел API Keys\n3. Создайте новый ключ\n4. Добавьте его в переменные окружения\n\nПосле настройки перезапустите сервер.`;
+        
         const aiMessage = {
             id: uuidv4(),
             role: 'assistant',
@@ -347,25 +164,56 @@ app.post('/api/chat/:sessionId', async (req, res) => {
         return res.json({ message: aiMessage });
     }
     
+    // Ограничиваем историю для больших сообщений (последние 20 сообщений)
+    const recentMessages = session.messages.slice(-20);
+    
     const messages = [
-        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник. Отвечай на русском языке.' },
-        ...session.messages.map(m => ({ role: m.role, content: m.content }))
+        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, полезный помощник. Отвечай на русском языке, будь дружелюбным и профессиональным.' },
+        ...recentMessages.map(m => ({ role: m.role, content: m.content }))
     ];
     
+    // Подсчет токенов (приблизительный)
+    const estimatedTokens = JSON.stringify(messages).length / 4;
+    console.log(`📊 Примерное количество токенов: ${Math.round(estimatedTokens)}`);
+    
+    // Если сообщение слишком большое, отправляем предупреждение
+    if (estimatedTokens > 100000) {
+        console.log('⚠️ Сообщение слишком большое, отправляем предупреждение');
+        const warningMessage = `⚠️ **Ваше сообщение очень большое** (примерно ${Math.round(estimatedTokens)} токенов).\n\nDeepSeek может не обработать его целиком. Рекомендую:\n- Отправить код частями\n- Выделить наиболее важные фрагменты\n- Или подождать — я попробую обработать, но это может занять время.`;
+        
+        const aiMessage = {
+            id: uuidv4(),
+            role: 'assistant',
+            content: warningMessage,
+            timestamp: new Date().toISOString()
+        };
+        session.messages.push(aiMessage);
+        return res.json({ message: aiMessage });
+    }
+    
     try {
+        console.log(`📤 Отправка запроса в DeepSeek API...`);
+        const startTime = Date.now();
+        
+        // Увеличенный таймаут для больших сообщений
+        const timeoutMs = Math.min(300000, Math.max(120000, estimatedTokens * 2)); // минимум 2 минуты, максимум 5 минут
+        
         const response = await axios.post(process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions', {
             model: model,
             messages: messages,
-            max_tokens: 4096,
-            temperature: temperature,
-            stream: false
+            max_tokens: 8192, // Увеличиваем до 8K
+            temperature: temperature
         }, {
             headers: {
                 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            timeout: 60000
+            timeout: timeoutMs
         });
+        
+        const duration = Date.now() - startTime;
+        console.log(`✅ Ответ получен за ${duration}ms`);
+        console.log(`📊 Использовано токенов: ${response.data.usage?.total_tokens || 'неизвестно'}`);
         
         const aiResponse = response.data.choices[0].message.content;
         
@@ -381,8 +229,22 @@ app.post('/api/chat/:sessionId', async (req, res) => {
         res.json({ message: aiMessage, usage: response.data.usage });
         
     } catch (error) {
-        console.error('❌ DeepSeek API ошибка:', error.message);
-        const errorMessage = `⚠️ Ошибка: ${error.message}`;
+        console.error('❌ Ошибка DeepSeek API:', error.code || error.message);
+        
+        let errorMessage = '⚠️ Произошла ошибка при обращении к AI.';
+        
+        if (error.code === 'ECONNABORTED') {
+            errorMessage = '⏰ Превышено время ожидания ответа от AI. Ваш запрос слишком сложный или длинный. Попробуйте:\n- Отправить код частями\n- Упростить запрос\n- Сократить сообщение';
+        } else if (error.response?.status === 429) {
+            errorMessage = '📊 Слишком много запросов. Подождите немного и попробуйте снова.';
+        } else if (error.response?.status === 401) {
+            errorMessage = '🔑 Ошибка авторизации API. Проверьте ключ DeepSeek API в настройках.';
+        } else if (error.response?.data?.error?.message) {
+            errorMessage = `⚠️ Ошибка API: ${error.response.data.error.message}`;
+        } else if (error.message) {
+            errorMessage = `⚠️ Ошибка: ${error.message}`;
+        }
+        
         const aiMessage = {
             id: uuidv4(),
             role: 'assistant',
@@ -391,12 +253,13 @@ app.post('/api/chat/:sessionId', async (req, res) => {
             isError: true
         };
         session.messages.push(aiMessage);
+        
         res.status(500).json({ error: error.message, message: aiMessage });
     }
 });
 
 // ============================================
-// АНАЛИЗ КОДА
+// АНАЛИЗ КОДА (увеличенные таймауты)
 // ============================================
 
 app.post('/api/analyze-code', upload.single('file'), async (req, res) => {
@@ -410,7 +273,7 @@ app.post('/api/analyze-code', upload.single('file'), async (req, res) => {
             codeContent = fs.readFileSync(req.file.path, 'utf-8');
             language = req.file.originalname.split('.').pop() || language;
             fs.unlinkSync(req.file.path);
-            console.log(`📄 Файл: ${req.file.originalname}, ${codeContent.length} символов`);
+            console.log(`📄 Файл: ${req.file.originalname}, ${codeContent.length} символов, ${codeContent.split('\n').length} строк`);
         } catch (error) {
             console.error('Ошибка чтения файла:', error);
             return res.status(500).json({ error: 'Ошибка чтения файла' });
@@ -427,37 +290,81 @@ app.post('/api/analyze-code', upload.single('file'), async (req, res) => {
         });
     }
     
-    const MAX_CODE_LENGTH = 50000;
+    // Ограничиваем длину для API (100K символов)
+    const MAX_CODE_LENGTH = 80000;
     let wasTruncated = false;
+    let originalLength = codeContent.length;
     if (codeContent.length > MAX_CODE_LENGTH) {
-        codeContent = codeContent.substring(0, MAX_CODE_LENGTH) + '\n... (код обрезан)';
+        codeContent = codeContent.substring(0, MAX_CODE_LENGTH) + '\n... (код обрезан, было ' + originalLength + ' символов)';
         wasTruncated = true;
+        console.log(`✂️ Код обрезан: ${originalLength} -> ${MAX_CODE_LENGTH} символов`);
     }
     
-    const prompt = `Проанализируй этот код на ${language}:\n\n\`\`\`${language}\n${codeContent}\n\`\`\`\n\n${wasTruncated ? '⚠️ Код был обрезан.\n\n' : ''}Предоставь анализ:\n1. Общая оценка качества кода (от 1 до 10)\n2. Потенциальные проблемы и баги\n3. Рекомендации по улучшению\n\nОтвечай на русском языке, структурированно.`;
-    
+    const prompt = `Проанализируй этот код на ${language} (${codeContent.split('\n').length} строк, ${codeContent.length} символов):
+
+\`\`\`${language}
+${codeContent}
+\`\`\`
+
+${wasTruncated ? '⚠️ ВНИМАНИЕ: Код был обрезан из-за большого размера.\n\n' : ''}
+
+Предоставь структурированный анализ:
+
+## 📊 Общая оценка
+- Оценка качества (1-10)
+- Краткое описание
+
+## 🐛 Потенциальные проблемы
+- Перечисли основные проблемы и баги
+
+## 💡 Рекомендации по улучшению
+- Конкретные советы по оптимизации
+
+## 📝 Пример исправления (если есть критические ошибки)
+
+Отвечай на русском языке, используй markdown.`;
+
     try {
+        console.log(`📤 Отправка запроса в DeepSeek API...`);
+        const startTime = Date.now();
+        
+        // Увеличенный таймаут для анализа кода (до 3 минут)
+        const timeoutMs = Math.min(180000, Math.max(90000, codeContent.length / 1000 * 2));
+        
         const response = await axios.post(process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions', {
             model: 'deepseek-chat',
             messages: [
-                { role: 'system', content: 'Ты эксперт по анализу кода. Отвечай структурированно на русском языке.' },
+                { role: 'system', content: 'Ты эксперт по анализу кода с 10-летним опытом. Отвечай структурированно, используй markdown. Всегда отвечай на русском языке.' },
                 { role: 'user', content: prompt }
             ],
-            max_tokens: 4096,
+            max_tokens: 8192,
             temperature: 0.3
         }, {
             headers: { 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}` },
-            timeout: 90000
+            timeout: timeoutMs
         });
         
+        const duration = Date.now() - startTime;
+        console.log(`✅ Анализ завершен за ${duration}ms`);
+        
         const analysis = response.data.choices[0].message.content;
-        const header = `📊 **Анализ кода**\n\n📁 ${req.file ? req.file.originalname : 'вставленный код'}\n📏 ${codeContent.length} символов\n${wasTruncated ? '⚠️ Код был обрезан для анализа\n' : ''}\n---\n\n`;
+        const header = `📊 **Анализ кода**\n\n📁 ${req.file ? req.file.originalname : 'вставленный код'}\n📏 ${codeContent.length} символов\n📊 ${codeContent.split('\n').length} строк\n${wasTruncated ? '⚠️ Код был обрезан для анализа\n' : ''}\n---\n\n`;
         
         res.json({ analysis: header + analysis });
         
     } catch (error) {
-        console.error('Ошибка анализа:', error.message);
-        res.status(500).json({ error: error.message });
+        console.error('❌ Ошибка анализа:', error.code || error.message);
+        
+        let errorMessage = '⚠️ Не удалось проанализировать код.';
+        if (error.code === 'ECONNABORTED') {
+            errorMessage = '⏰ Превышено время ожидания. Код слишком большой. Попробуйте:\n- Отправить код частями\n- Уменьшить размер файла';
+        } else if (error.response?.status === 429) {
+            errorMessage = '📊 Слишком много запросов. Подождите немного.';
+        } else {
+            errorMessage = `⚠️ Ошибка: ${error.message}`;
+        }
+        
+        res.status(500).json({ error: errorMessage });
     }
 });
 
@@ -483,10 +390,7 @@ app.post('/api/voice/process', upload.single('voice'), (req, res) => {
     });
 });
 
-// ============================================
-// УДАЛЕНИЕ СЕССИИ
-// ============================================
-
+// Удаление сессии
 app.delete('/api/chat/:sessionId', (req, res) => {
     const { sessionId } = req.params;
     if (sessions.has(sessionId)) {
@@ -506,17 +410,14 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Обработка 404 для API
 app.get('/api/*', (req, res) => {
     res.status(404).json({ error: `API endpoint not found: ${req.originalUrl}` });
 });
 
-// Для всех остальных маршрутов - SPA
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Глобальный обработчик ошибок
 app.use((err, req, res, next) => {
     console.error('❌ Необработанная ошибка:', err);
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
@@ -536,6 +437,7 @@ app.listen(PORT, '0.0.0.0', () => {
 ║     🌐 Режим: ${process.env.NODE_ENV || 'development'}                                    ║
 ║     🔑 API Key: ${process.env.DEEPSEEK_API_KEY && process.env.DEEPSEEK_API_KEY !== 'your_api_key_here' ? '✅ установлен' : '❌ не установлен'}           ║
 ║     💾 Активных сессий: ${sessions.size}                                                  ║
+║     ⏰ Таймаут запросов: до 5 минут                                ║
 ║                                                                  ║
 ║     🚀 Готов к работе!                                           ║
 ║     📍 http://localhost:${PORT}                                         ║
