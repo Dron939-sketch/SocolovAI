@@ -1,7 +1,6 @@
 // ============================================
 // СОКОЛОВ AI - ПОЛНЫЙ КЛИЕНТСКИЙ КОД
-// Исправлен: QUIC ошибки, fallback на обычный чат
-// Поддержка: темы, голос, файлы, копирование кода
+// Без streaming (только обычные запросы) - фикс QUIC ошибок
 // ============================================
 
 (function() {
@@ -14,7 +13,6 @@
     let currentSessionId = null;
     let chats = [];
     let isTyping = false;
-    let currentStreamController = null;
     let voiceManager = null;
     
     // DOM элементы
@@ -429,7 +427,7 @@
     }
     
     // ============================================
-    // ОТПРАВКА СООБЩЕНИЙ (с fallback)
+    // ОТПРАВКА СООБЩЕНИЙ (только обычные запросы)
     // ============================================
     
     async function sendMessageRegular(message) {
@@ -448,143 +446,34 @@
             
             const data = await response.json();
             
+            hideTypingIndicator();
+            
             if (data.message) {
                 addMessage('bot', data.message.content);
+                // Сохраняем ответ в локальный чат
+                const chat = chats.find(c => c.id === currentSessionId);
+                if (chat) {
+                    chat.messages.push(data.message);
+                    saveChats();
+                }
             } else if (data.error) {
                 addMessage('bot', `⚠️ Ошибка: ${data.error}`);
             } else {
                 addMessage('bot', '⚠️ Не удалось получить ответ.');
             }
             
+            return true;
+            
         } catch (error) {
             console.error('Regular chat error:', error);
-            addMessage('bot', '⚠️ Ошибка соединения. Попробуйте позже.');
-        }
-    }
-    
-    async function sendMessageWithStream(message) {
-        const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
-        
-        if (currentStreamController) {
-            currentStreamController.abort();
-        }
-        
-        currentStreamController = new AbortController();
-        
-        // Таймаут на весь стрим
-        const timeoutId = setTimeout(() => {
-            if (currentStreamController) {
-                currentStreamController.abort();
-                hideTypingIndicator();
-                addMessage('bot', '⏰ Превышено время ожидания ответа. Попробуйте еще раз.');
-                isTyping = false;
-                updateStatus('ready', 'Готов к работе');
+            hideTypingIndicator();
+            
+            let errorMessage = '⚠️ Ошибка соединения. Попробуйте позже.';
+            if (error.name === 'AbortError') {
+                errorMessage = '⏰ Превышено время ожидания ответа. Попробуйте еще раз.';
             }
-        }, 120000);
-        
-        try {
-            const response = await fetch(`/api/chat/${currentSessionId}/stream`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: message,
-                    model: selectedModel,
-                    temperature: 0.7
-                }),
-                signal: currentStreamController.signal
-            });
-            
-            if (!response.ok) {
-                // Поток не удался, пробуем обычный чат
-                console.warn('Stream failed with status', response.status, 'falling back to regular chat');
-                await sendMessageRegular(message);
-                return;
-            }
-            
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            
-            let botMessageElement = null;
-            let fullResponse = '';
-            
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                
-                const chunk = decoder.decode(value);
-                const lines = chunk.split('\n');
-                
-                for (const line of lines) {
-                    if (line.startsWith('data: ')) {
-                        const data = line.slice(6);
-                        if (data === '[DONE]') continue;
-                        
-                        try {
-                            const parsed = JSON.parse(data);
-                            if (parsed.content) {
-                                fullResponse += parsed.content;
-                                
-                                if (!botMessageElement) {
-                                    const messageHtml = `
-                                        <div class="message bot">
-                                            <div class="message-avatar">
-                                                <i class="fas fa-robot"></i>
-                                            </div>
-                                            <div class="message-content">
-                                                <div class="message-bubble" id="streamingMessage"></div>
-                                            </div>
-                                        </div>
-                                    `;
-                                    messagesList.insertAdjacentHTML('beforeend', messageHtml);
-                                    botMessageElement = document.getElementById('streamingMessage');
-                                }
-                                
-                                if (botMessageElement) {
-                                    botMessageElement.innerHTML = formatMessageWithCode(fullResponse);
-                                    scrollToBottom();
-                                }
-                            }
-                            
-                            if (parsed.done) {
-                                const chat = chats.find(c => c.id === currentSessionId);
-                                if (chat) {
-                                    chat.messages.push({
-                                        id: Date.now().toString(),
-                                        role: 'assistant',
-                                        content: fullResponse,
-                                        timestamp: new Date().toISOString()
-                                    });
-                                    saveChats();
-                                }
-                            }
-                            
-                        } catch (e) {
-                            // пропускаем некорректный JSON
-                        }
-                    }
-                    
-                    if (line.startsWith('event: done')) {
-                        // стрим завершён
-                        break;
-                    }
-                    
-                    if (line.startsWith('event: error')) {
-                        const errorData = JSON.parse(line.slice(12));
-                        throw new Error(errorData.error);
-                    }
-                }
-            }
-            
-        } catch (error) {
-            console.error('Stream error:', error);
-            if (error.name !== 'AbortError') {
-                // При любой ошибке потока пробуем обычный чат
-                console.log('Falling back to regular chat due to stream error');
-                await sendMessageRegular(message);
-            }
-        } finally {
-            clearTimeout(timeoutId);
-            currentStreamController = null;
+            addMessage('bot', errorMessage);
+            return false;
         }
     }
     
@@ -606,7 +495,7 @@
         updateStatus('thinking', 'Думаю...');
         
         try {
-            await sendMessageWithStream(message);
+            await sendMessageRegular(message);
         } catch (error) {
             console.error('Ошибка отправки:', error);
             addMessage('bot', '⚠️ Извините, произошла ошибка. Пожалуйста, попробуйте позже.');
@@ -675,7 +564,12 @@
         } catch (error) {
             console.error('Ошибка анализа:', error);
             hideTypingIndicator();
-            addMessage('bot', '⚠️ Не удалось проанализировать файл. Попробуйте еще раз.');
+            
+            let errorMessage = '⚠️ Не удалось проанализировать файл. Попробуйте еще раз.';
+            if (error.name === 'AbortError') {
+                errorMessage = '⏰ Превышено время ожидания. Файл слишком большой?';
+            }
+            addMessage('bot', errorMessage);
         } finally {
             isTyping = false;
             updateStatus('ready', 'Готов к работе');
@@ -725,7 +619,7 @@
     }
     
     // ============================================
-    // ГОЛОСОВОЙ МОДУЛЬ (если используется)
+    // ГОЛОСОВОЙ МОДУЛЬ
     // ============================================
     
     function initVoice() {
@@ -758,14 +652,7 @@
                 if (voiceBtn) voiceBtn.classList.remove('recording');
             };
             
-            voiceManager.onVolumeChange = (volume) => {
-                const bars = document.querySelectorAll('.voice-visualizer span');
-                const intensity = Math.min(1, volume / 100);
-                bars.forEach((bar, i) => {
-                    const height = 20 + (intensity * 60) * (1 - i * 0.05);
-                    bar.style.height = `${Math.max(20, height)}px`;
-                });
-            };
+            console.log('🎤 Голосовой модуль инициализирован');
         }
     }
     
