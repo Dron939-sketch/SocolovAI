@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes, viewport-fit=cover">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#0a0a0a">
+    <meta name="theme-color" content="#0a0a0a" id="theme-color">
     <meta name="description" content="Соколов AI — интеллектуальный помощник на базе DeepSeek. Анализ кода, ответы на вопросы, помощь в разработке.">
     
     <title>Соколов AI | Интеллектуальный помощник</title>
@@ -75,17 +75,22 @@
         <!-- Основная область -->
         <main class="main-area">
             <div class="chat-header">
-                <button class="menu-toggle" id="menuToggle">
-                    <i class="fas fa-bars"></i>
-                </button>
-                <div class="header-title">
-                    <h1>Соколов AI</h1>
-                    <span class="status-badge" id="statusBadge">
-                        <span class="status-dot"></span>
-                        Готов к работе
-                    </span>
+                <div class="chat-header-left">
+                    <button class="menu-toggle" id="menuToggle">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <div class="header-title">
+                        <h1>Соколов AI</h1>
+                        <div class="status-badge" id="statusBadge">
+                            <span class="status-dot"></span>
+                            <span>Готов к работе</span>
+                        </div>
+                    </div>
                 </div>
                 <div class="header-actions">
+                    <button class="theme-toggle" id="themeToggle" title="Переключить тему">
+                        <i class="fas fa-moon"></i>
+                    </button>
                     <button class="action-btn" id="clearChatBtn" title="Очистить чат">
                         <i class="fas fa-trash-alt"></i>
                     </button>
@@ -162,7 +167,7 @@
                     <button class="tool-btn" id="clearInputBtn" title="Очистить">
                         <i class="fas fa-eraser"></i>
                     </button>
-                    <input type="file" id="fileInput" style="display: none" accept=".js,.py,.html,.css,.json,.txt,.md">
+                    <input type="file" id="fileInput" style="display: none" accept=".js,.py,.html,.css,.json,.txt,.md,.ts,.jsx,.tsx,.c,.cpp,.java,.go,.rs">
                 </div>
                 <div class="input-wrapper">
                     <textarea 
@@ -185,15 +190,14 @@
     <!-- Модальное окно для голосовой записи -->
     <div class="voice-modal" id="voiceModal" style="display: none;">
         <div class="voice-modal-content">
-            <div class="voice-visualizer">
-                <div class="voice-circle">
-                    <i class="fas fa-microphone"></i>
-                </div>
-                <div class="voice-waves">
-                    <span></span><span></span><span></span><span></span><span></span>
-                </div>
-                <div class="voice-timer" id="voiceTimer">0:00</div>
+            <div class="voice-circle">
+                <i class="fas fa-microphone"></i>
             </div>
+            <div class="voice-visualizer">
+                <span></span><span></span><span></span><span></span><span></span>
+                <span></span><span></span><span></span><span></span><span></span>
+            </div>
+            <div class="voice-timer" id="voiceTimer">0:00</div>
             <div class="voice-actions">
                 <button class="voice-cancel-btn" id="voiceCancelBtn">
                     <i class="fas fa-times"></i> Отмена
@@ -202,13 +206,208 @@
                     <i class="fas fa-stop"></i> Завершить
                 </button>
             </div>
-            <div class="voice-hint">Говорите... мы вас слушаем</div>
+            <div class="voice-hint">
+                <i class="fas fa-microphone-alt"></i> Говорите... мы вас слушаем
+            </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Скрипты -->
     <script src="config.js"></script>
     <script src="voice.js"></script>
     <script src="app.js"></script>
+    
+    <!-- Дополнительные стили для анимаций -->
+    <style>
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateX(-50%) translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+        }
+        
+        @keyframes slideDown {
+            from {
+                opacity: 1;
+                transform: translateX(-50%) translateY(0);
+            }
+            to {
+                opacity: 0;
+                transform: translateX(-50%) translateY(20px);
+            }
+        }
+        
+        /* Стили для скроллбара */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: var(--scrollbar-track, #1a1a1a);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: var(--scrollbar-thumb, #e67e22);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-hover, #f39c12);
+        }
+        
+        /* Адаптация для мобильных */
+        @media (max-width: 768px) {
+            .voice-modal-content {
+                width: 90%;
+                padding: 20px;
+            }
+            
+            .voice-circle {
+                width: 80px;
+                height: 80px;
+            }
+            
+            .voice-circle i {
+                font-size: 32px;
+            }
+            
+            .voice-timer {
+                font-size: 28px;
+            }
+            
+            .voice-actions button {
+                padding: 8px 16px;
+                font-size: 12px;
+            }
+        }
+        
+        /* Плавное появление сообщений */
+        .message {
+            animation: fadeInUp 0.3s ease-out;
+        }
+        
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        /* Индикатор набора текста */
+        .typing-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background: var(--bg-tertiary);
+            border-radius: 20px;
+            width: fit-content;
+            margin-top: 8px;
+        }
+        
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent-primary);
+            border-radius: 50%;
+            animation: typingBounce 1.4s infinite;
+        }
+        
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        
+        @keyframes typingBounce {
+            0%, 60%, 100% {
+                transform: translateY(0);
+                opacity: 0.5;
+            }
+            30% {
+                transform: translateY(-8px);
+                opacity: 1;
+            }
+        }
+        
+        /* Стили для кнопки копирования */
+        .copy-code-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            border-radius: 6px;
+            padding: 4px 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.2s ease;
+        }
+        
+        .copy-code-btn:hover {
+            background: var(--accent-primary);
+            color: white;
+        }
+        
+        .copy-code-btn.copied {
+            background: var(--success);
+            color: white;
+        }
+        
+        /* Стили для блоков кода */
+        .code-block-wrapper {
+            margin: 12px 0;
+            border-radius: 12px;
+            overflow: hidden;
+            background: var(--bg-code, #0d1117);
+            border: 1px solid var(--border-color);
+        }
+        
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .code-language {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--accent-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .code-block-wrapper pre {
+            margin: 0;
+            padding: 12px;
+            overflow-x: auto;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        
+        .code-block-wrapper code {
+            font-family: 'Fira Code', 'Courier New', monospace;
+        }
+        
+        .inline-code {
+            background: rgba(230, 126, 34, 0.2);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.9em;
+            color: var(--accent-primary);
+        }
+    </style>
 </body>
 </html>
