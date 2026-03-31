@@ -1,6 +1,7 @@
 // ============================================
 // СОКОЛОВ AI - ПОЛНЫЙ КЛИЕНТСКИЙ КОД
-// Исправлен: QUIC ошибки, улучшенный streaming, обработка ошибок
+// Исправлен: QUIC ошибки, fallback на обычный чат
+// Поддержка: темы, голос, файлы, копирование кода
 // ============================================
 
 (function() {
@@ -428,8 +429,38 @@
     }
     
     // ============================================
-    // ПОТОКОВАЯ ПЕРЕДАЧА - ИСПРАВЛЕННАЯ
+    // ОТПРАВКА СООБЩЕНИЙ (с fallback)
     // ============================================
+    
+    async function sendMessageRegular(message) {
+        const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
+        
+        try {
+            const response = await fetch(`/api/chat/${currentSessionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    model: selectedModel,
+                    temperature: 0.7
+                })
+            });
+            
+            const data = await response.json();
+            
+            if (data.message) {
+                addMessage('bot', data.message.content);
+            } else if (data.error) {
+                addMessage('bot', `⚠️ Ошибка: ${data.error}`);
+            } else {
+                addMessage('bot', '⚠️ Не удалось получить ответ.');
+            }
+            
+        } catch (error) {
+            console.error('Regular chat error:', error);
+            addMessage('bot', '⚠️ Ошибка соединения. Попробуйте позже.');
+        }
+    }
     
     async function sendMessageWithStream(message) {
         const selectedModel = modelSelect ? modelSelect.value : 'deepseek-chat';
@@ -440,12 +471,12 @@
         
         currentStreamController = new AbortController();
         
-        // Таймаут 2 минуты
+        // Таймаут на весь стрим
         const timeoutId = setTimeout(() => {
             if (currentStreamController) {
                 currentStreamController.abort();
                 hideTypingIndicator();
-                addMessage('bot', '⏰ Превышено время ожидания ответа. Попробуйте еще раз или отправьте более короткое сообщение.');
+                addMessage('bot', '⏰ Превышено время ожидания ответа. Попробуйте еще раз.');
                 isTyping = false;
                 updateStatus('ready', 'Готов к работе');
             }
@@ -464,7 +495,10 @@
             });
             
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+                // Поток не удался, пробуем обычный чат
+                console.warn('Stream failed with status', response.status, 'falling back to regular chat');
+                await sendMessageRegular(message);
+                return;
             }
             
             const reader = response.body.getReader();
@@ -472,18 +506,11 @@
             
             let botMessageElement = null;
             let fullResponse = '';
-            let lastChunkTime = Date.now();
-            let heartbeatInterval = setInterval(() => {
-                if (Date.now() - lastChunkTime > 30000 && fullResponse) {
-                    console.log('Heartbeat: still waiting for response...');
-                }
-            }, 10000);
             
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
                 
-                lastChunkTime = Date.now();
                 const chunk = decoder.decode(value);
                 const lines = chunk.split('\n');
                 
@@ -494,7 +521,6 @@
                         
                         try {
                             const parsed = JSON.parse(data);
-                            
                             if (parsed.content) {
                                 fullResponse += parsed.content;
                                 
@@ -533,32 +559,28 @@
                             }
                             
                         } catch (e) {
-                            // Пропускаем некорректные данные
+                            // пропускаем некорректный JSON
                         }
                     }
                     
                     if (line.startsWith('event: done')) {
-                        clearInterval(heartbeatInterval);
+                        // стрим завершён
                         break;
                     }
                     
                     if (line.startsWith('event: error')) {
-                        try {
-                            const errorData = JSON.parse(line.slice(12));
-                            throw new Error(errorData.error);
-                        } catch (e) {
-                            throw new Error('Ошибка потока данных');
-                        }
+                        const errorData = JSON.parse(line.slice(12));
+                        throw new Error(errorData.error);
                     }
                 }
             }
             
-            clearInterval(heartbeatInterval);
-            
         } catch (error) {
             console.error('Stream error:', error);
             if (error.name !== 'AbortError') {
-                addMessage('bot', '⚠️ Ошибка соединения. Попробуйте еще раз или отправьте более короткое сообщение.');
+                // При любой ошибке потока пробуем обычный чат
+                console.log('Falling back to regular chat due to stream error');
+                await sendMessageRegular(message);
             }
         } finally {
             clearTimeout(timeoutId);
@@ -703,6 +725,80 @@
     }
     
     // ============================================
+    // ГОЛОСОВОЙ МОДУЛЬ (если используется)
+    // ============================================
+    
+    function initVoice() {
+        if (typeof window.VoiceManager !== 'undefined') {
+            voiceManager = new window.VoiceManager();
+            
+            voiceManager.onTranscript = (text) => {
+                if (messageInput) {
+                    messageInput.value = text;
+                    adjustTextareaHeight();
+                    setTimeout(() => {
+                        if (messageInput.value.trim()) {
+                            sendMessage();
+                        }
+                    }, 500);
+                }
+            };
+            
+            voiceManager.onError = (error) => {
+                showToast(error, 'error');
+            };
+            
+            voiceManager.onRecordingStart = () => {
+                const voiceBtn = document.getElementById('recordVoiceBtn');
+                if (voiceBtn) voiceBtn.classList.add('recording');
+            };
+            
+            voiceManager.onRecordingStop = () => {
+                const voiceBtn = document.getElementById('recordVoiceBtn');
+                if (voiceBtn) voiceBtn.classList.remove('recording');
+            };
+            
+            voiceManager.onVolumeChange = (volume) => {
+                const bars = document.querySelectorAll('.voice-visualizer span');
+                const intensity = Math.min(1, volume / 100);
+                bars.forEach((bar, i) => {
+                    const height = 20 + (intensity * 60) * (1 - i * 0.05);
+                    bar.style.height = `${Math.max(20, height)}px`;
+                });
+            };
+        }
+    }
+    
+    function addVoiceButton() {
+        const inputTools = document.querySelector('.input-tools');
+        if (inputTools && !document.getElementById('recordVoiceBtn')) {
+            const voiceBtn = document.createElement('button');
+            voiceBtn.id = 'recordVoiceBtn';
+            voiceBtn.className = 'tool-btn voice-btn';
+            voiceBtn.innerHTML = '<i class="fas fa-microphone"></i>';
+            voiceBtn.title = 'Голосовой ввод';
+            voiceBtn.onclick = () => {
+                if (voiceManager) {
+                    if (voiceManager.isRecordingActive()) {
+                        voiceManager.stopRecording();
+                    } else {
+                        voiceManager.startRecording();
+                    }
+                } else {
+                    showToast('Голосовой модуль загружается...', 'info');
+                }
+            };
+            
+            const clearBtn = document.getElementById('clearInputBtn');
+            if (clearBtn) {
+                inputTools.insertBefore(voiceBtn, clearBtn);
+            } else {
+                inputTools.appendChild(voiceBtn);
+            }
+        }
+    }
+    
+    // ============================================
     // ИНИЦИАЛИЗАЦИЯ
     // ============================================
     
@@ -721,6 +817,11 @@
         setupEventListeners();
         
         window.themeManager = new ThemeManager();
+        
+        setTimeout(() => {
+            initVoice();
+            addVoiceButton();
+        }, 1000);
         
         updateStatus('ready', 'Готов к работе');
         console.log('✅ Соколов AI готов');
