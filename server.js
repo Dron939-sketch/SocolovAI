@@ -164,19 +164,22 @@ app.get('/api/chat/:sessionId', (req, res) => {
 // ПОТОКОВАЯ ПЕРЕДАЧА (STREAMING) - КАК У DEEPSEEK
 // ============================================
 
-app.post('/api/chat/:sessionId/stream', async (req, res) => {
+app.post('/api/chat/:sessionId', async (req, res) => {
     const { sessionId } = req.params;
-    const { message, model = process.env.DEFAULT_MODEL || 'deepseek-chat', temperature = TEMPERATURE } = req.body;
+    let { message, model = 'deepseek-chat', temperature = TEMPERATURE } = req.body;
     
-    console.log(`📡 Stream запрос для ${sessionId}`);
+    console.log(`\n💬 ========== НОВЫЙ ЗАПРОС ==========`);
+    console.log(`📡 Сессия: ${sessionId}`);
     console.log(`📏 Длина сообщения: ${message?.length || 0} символов`);
     console.log(`🌡️ Температура: ${temperature}`);
+    console.log(`🤖 Модель: ${model}`);
     
     if (!message || message.trim() === '') {
         return res.status(400).json({ error: 'Сообщение не может быть пустым' });
     }
     
     const session = getSession(sessionId);
+    console.log(`💾 Сообщений в истории: ${session.messages.length}`);
     
     const userMessage = {
         id: uuidv4(),
@@ -186,133 +189,111 @@ app.post('/api/chat/:sessionId/stream', async (req, res) => {
     };
     session.messages.push(userMessage);
     
-    // Настройка SSE
-    res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no'
-    });
-    
     // Проверка API ключа
     if (!process.env.DEEPSEEK_API_KEY || process.env.DEEPSEEK_API_KEY === 'your_api_key_here') {
         console.log('⚠️ API ключ не настроен');
         const mockResponse = `⚠️ **API ключ DeepSeek не настроен.**\n\nДобавьте переменную окружения DEEPSEEK_API_KEY в настройках Render.\n\n**Как получить ключ:**\n1. Зарегистрируйтесь на [platform.deepseek.com](https://platform.deepseek.com)\n2. Перейдите в раздел API Keys\n3. Создайте новый ключ\n4. Добавьте его в переменные окружения\n\nПосле настройки перезапустите сервер.`;
         
-        for (let i = 0; i < mockResponse.length; i++) {
-            res.write(`data: ${JSON.stringify({ content: mockResponse[i], done: false })}\n\n`);
-            await new Promise(r => setTimeout(r, 5));
-        }
-        res.write(`event: done\ndata: ${JSON.stringify({ fullResponse: mockResponse })}\n\n`);
-        res.end();
-        return;
+        const aiMessage = {
+            id: uuidv4(),
+            role: 'assistant',
+            content: mockResponse,
+            timestamp: new Date().toISOString()
+        };
+        session.messages.push(aiMessage);
+        return res.json({ message: aiMessage });
     }
     
     // Берем последние сообщения для контекста
     const recentMessages = session.messages.slice(-MAX_HISTORY_MESSAGES);
     
+    // ФОРМИРУЕМ МАССИВ ДЛЯ API
     const messages = [
-        { role: 'system', content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, интеллектуальный помощник на базе DeepSeek. Отвечай на русском языке, будь полезным, дружелюбным и профессиональным.' },
+        { 
+            role: 'system', 
+            content: process.env.SYSTEM_PROMPT || 'Ты — Соколов AI, интеллектуальный помощник на базе DeepSeek. Отвечай на русском языке, будь полезным, дружелюбным и профессиональным.' 
+        },
         ...recentMessages.map(m => ({ role: m.role, content: m.content }))
     ];
     
+    // Фильтруем пустые сообщения
+    const validMessages = messages.filter(m => m.content && m.content.trim() !== '');
+    
+    console.log(`📤 Отправка запроса в DeepSeek API...`);
+    console.log(`📊 Количество сообщений: ${validMessages.length}`);
+    console.log(`📋 System: ${validMessages[0]?.content?.substring(0, 80)}...`);
+    console.log(`💬 Последнее: ${validMessages[validMessages.length-1]?.content?.substring(0, 50)}...`);
+    
     try {
-        console.log(`📤 Отправка потокового запроса в DeepSeek API...`);
         const startTime = Date.now();
         
-        const response = await axios({
-            method: 'POST',
-            url: process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions',
-            data: {
-                model: model,
-                messages: messages,
-                max_tokens: MAX_TOKENS,
-                temperature: temperature,
-                stream: true
-            },
+        const requestBody = {
+            model: model,
+            messages: validMessages,
+            max_tokens: MAX_TOKENS,
+            temperature: temperature
+        };
+        
+        console.log(`🔗 URL: ${process.env.DEEPSEEK_API_URL}`);
+        console.log(`🔑 API Key: ${process.env.DEEPSEEK_API_KEY ? '✅ установлен' : '❌'}`);
+        
+        const response = await axios.post(process.env.DEEPSEEK_API_URL || 'https://api.deepseek.com/v1/chat/completions', requestBody, {
             headers: {
                 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
                 'Content-Type': 'application/json'
             },
-            responseType: 'stream',
             timeout: REQUEST_TIMEOUT_MS
         });
         
-        let fullResponse = '';
-        let chunkCount = 0;
-        let isEnded = false;
+        const duration = Date.now() - startTime;
+        console.log(`✅ Ответ получен за ${duration}ms`);
+        console.log(`📊 Использовано токенов: ${response.data.usage?.total_tokens || 'неизвестно'}`);
         
-        response.data.on('data', (chunk) => {
-            if (isEnded) return;
-            
-            const lines = chunk.toString().split('\n');
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') {
-                        if (!isEnded) {
-                            isEnded = true;
-                            const aiMessage = {
-                                id: uuidv4(),
-                                role: 'assistant',
-                                content: fullResponse,
-                                timestamp: new Date().toISOString()
-                            };
-                            session.messages.push(aiMessage);
-                            res.write(`event: done\ndata: ${JSON.stringify({ fullResponse })}\n\n`);
-                            res.end();
-                        }
-                        return;
-                    }
-                    try {
-                        const parsed = JSON.parse(data);
-                        const content = parsed.choices[0]?.delta?.content || '';
-                        if (content) {
-                            fullResponse += content;
-                            chunkCount++;
-                            res.write(`data: ${JSON.stringify({ content, done: false })}\n\n`);
-                        }
-                    } catch (e) {
-                        // Пропускаем некорректные данные
-                    }
-                }
-            }
-        });
+        const aiResponse = response.data.choices[0].message.content;
         
-        response.data.on('error', (error) => {
-            console.error('❌ Ошибка потока:', error.message);
-            if (!isEnded && !res.writableEnded) {
-                isEnded = true;
-                res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
-                res.end();
-            }
-        });
+        const aiMessage = {
+            id: uuidv4(),
+            role: 'assistant',
+            content: aiResponse,
+            timestamp: new Date().toISOString(),
+            usage: response.data.usage
+        };
+        session.messages.push(aiMessage);
         
-        response.data.on('end', () => {
-            const duration = Date.now() - startTime;
-            console.log(`✅ Поток завершен за ${duration}ms, отправлено ${chunkCount} чанков, длина ответа: ${fullResponse.length}`);
-            if (!isEnded && !res.writableEnded) {
-                isEnded = true;
-                if (fullResponse) {
-                    const aiMessage = {
-                        id: uuidv4(),
-                        role: 'assistant',
-                        content: fullResponse,
-                        timestamp: new Date().toISOString()
-                    };
-                    session.messages.push(aiMessage);
-                    res.write(`event: done\ndata: ${JSON.stringify({ fullResponse })}\n\n`);
-                }
-                res.end();
-            }
-        });
+        res.json({ message: aiMessage, usage: response.data.usage });
         
     } catch (error) {
-        console.error('❌ Ошибка потокового запроса:', error.message);
-        if (!res.writableEnded) {
-            res.write(`event: error\ndata: ${JSON.stringify({ error: error.message })}\n\n`);
-            res.end();
+        console.error('❌ ОШИБКА DeepSeek API:');
+        console.error('Статус:', error.response?.status);
+        console.error('Данные ошибки:', JSON.stringify(error.response?.data, null, 2));
+        console.error('Сообщение:', error.message);
+        
+        let errorMessage = '⚠️ Произошла ошибка.';
+        
+        if (error.response?.status === 400) {
+            errorMessage = `⚠️ Ошибка в запросе к API. Проверьте формат сообщений.\n\nДетали: ${error.response?.data?.error?.message || 'Bad Request'}`;
+        } else if (error.response?.status === 401) {
+            errorMessage = '🔑 Ошибка авторизации API. Проверьте ключ DeepSeek API в настройках Render.';
+        } else if (error.response?.status === 429) {
+            errorMessage = '📊 Слишком много запросов. Подождите немного и попробуйте снова.';
+        } else if (error.code === 'ECONNABORTED') {
+            errorMessage = `⏰ Превышено время ожидания (${REQUEST_TIMEOUT_MS / 1000} сек). Попробуйте упростить запрос.`;
+        } else if (error.response?.data?.error?.message) {
+            errorMessage = `⚠️ Ошибка API: ${error.response.data.error.message}`;
+        } else if (error.message) {
+            errorMessage = `⚠️ Ошибка: ${error.message}`;
         }
+        
+        const aiMessage = {
+            id: uuidv4(),
+            role: 'assistant',
+            content: errorMessage,
+            timestamp: new Date().toISOString(),
+            isError: true
+        };
+        session.messages.push(aiMessage);
+        
+        res.status(500).json({ error: error.message, message: aiMessage });
     }
 });
 
